@@ -4,10 +4,11 @@ import { createServer } from 'node:http';
 import { createServer as netServer } from 'node:net';
 import { mkdir, mkdtemp, readFile, writeFile, access } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 
 export const root = fileURLToPath(new URL('../../', import.meta.url));
+export const providerGuardImportSpecifier = pathToFileURL(resolve(root, 'tests/acceptance/provider-network-guard.mjs')).href;
 export const frontend = 'http://127.0.0.1:5183';
 export const backend = 'http://127.0.0.1:47841';
 export const pack = resolve(root, 'tests/fixtures/browser-acceptance-20261015/BrokerDesk_Synthetic_Test_Pack');
@@ -89,7 +90,7 @@ export async function createRuntime() {
     await new Promise((ok, fail) => { const timer = setTimeout(() => fail(new Error('Test child did not stop')), 8000); child.once('exit', () => { clearTimeout(timer); ok(); }); child.kill(); });
   }
   async function startBackend() {
-    apiProcess = launch(`backend-${processes.length}`, ['--import', resolve(root, 'tests/acceptance/provider-network-guard.mjs'), 'local-server/server.mjs'], { BROKERDESK_DATA_DIR: data });
+    apiProcess = launch(`backend-${processes.length}`, ['--import', providerGuardImportSpecifier, 'local-server/server.mjs'], { BROKERDESK_DATA_DIR: data });
     await waitReady(backend + '/health', apiProcess); return apiProcess.pid;
   }
   return {
