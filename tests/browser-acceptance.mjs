@@ -6,11 +6,18 @@ import { resolve } from 'node:path';
 import { platform, release } from 'node:os';
 import { createRuntime, root, frontend, backend } from './acceptance/runtime.mjs';
 import { names, runScenario } from './acceptance/scenarios.mjs';
+import { diagnosticSummary, appendJobSummary } from './acceptance/reporting.mjs';
 
 const base = resolve(root, 'tests/.acceptance-runs'); await mkdir(base, { recursive: true });
 const run = await mkdtemp(resolve(base, 'suite-')); const output = resolve(run, 'artifacts'); await mkdir(output);
 const report = { status: 'BLOCKED', BROWSER_EXECUTED: false, STUBBED_OCR: 'NOT_RUN', LIVE_OCR: 'NOT_RUN', liveOcrCalls: 0, stubbedOcrCalls: 0, runnerOS: `${platform()} ${release()}`, command: 'node tests/browser-acceptance.mjs', scenarios: Object.entries(names).map(([id, name]) => ({ id, name, status: 'IMPLEMENTED_NOT_RUN', checks: [], workers: [], errors: [], failedRequests: [] })) };
-let rt, browser, timedOut = false;
+let rt, browser, timedOut = false, preflightLog = '', finalPrinted = false;
+async function finishReporting() {
+  if (finalPrinted) return;
+  finalPrinted = true;
+  console.log(diagnosticSummary(report, output, preflightLog));
+  await appendJobSummary(report, output).catch(e => console.error(`Job summary unavailable: ${e.message}`));
+}
 const escape = s => String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
 async function persist() {
   report.stubbedOcrCalls = rt?.calls.length ?? 0;
@@ -24,17 +31,23 @@ async function persist() {
 const deadline = setTimeout(async () => {
   timedOut = true; report.status = 'FAILED'; report.reason = '15-minute bounded suite timeout';
   for (const s of report.scenarios) if (s.status === 'RUNNING') s.status = 'FAILED_TIMEOUT';
-  await persist(); await browser?.close().catch(() => {}); await rt?.close().catch(() => {}); process.exit(1);
+  try {
+    await persist();
+    await browser?.close().catch(e => { report.cleanupError = e.message; });
+    await rt?.close().catch(e => { report.cleanupError = [report.cleanupError, e.message].filter(Boolean).join('; '); });
+    await persist();
+    await finishReporting();
+  } finally { process.exit(1); }
 }, 15 * 60 * 1000);
 try {
   // Preflight failures cannot become acceptance passes. No retries.
-  let preflightLog = '';
   const code = await new Promise(resolveExit => {
     const p = spawn(process.execPath, ['tests/browser-acceptance-preflight.mjs'], { cwd: root, windowsHide: true, stdio: ['ignore','pipe','pipe'] });
     p.stdout.on('data', b => { preflightLog += b; }); p.stderr.on('data', b => { preflightLog += b; });
     p.once('error', e => { preflightLog += e.message; resolveExit(1); }); p.once('exit', resolveExit);
   });
   await writeFile(resolve(output, 'preflight.log'), preflightLog);
+  report.preflight = code === 0 ? 'PASS' : 'FAILED';
   if (code !== 0) { report.reason = 'Preflight failed; A–E BLOCKED'; for (const s of report.scenarios) s.status = 'BLOCKED'; }
   else {
     rt = await createRuntime(); await rt.start();
@@ -64,11 +77,12 @@ try {
     }
     report.status = report.scenarios.every(s => s.status === 'ACTUAL_BROWSER_PASS') ? 'ACTUAL_BROWSER_PASS' : 'FAILED';
   }
-} catch(e) { report.reason = e.stack; report.status = report.BROWSER_EXECUTED ? 'FAILED' : 'BLOCKED'; }
+} catch(e) { report.reason = e.stack || e.message; report.status = report.BROWSER_EXECUTED ? 'FAILED' : 'BLOCKED'; await persist(); }
 finally {
   clearTimeout(deadline);
+  await persist();
   await browser?.close().catch(e => { report.cleanupError = e.message; report.status='FAILED'; });
-  await rt?.close().catch(e => { report.cleanupError = e.message; report.status='FAILED'; });
+  await rt?.close().catch(e => { report.cleanupError = [report.cleanupError, e.message].filter(Boolean).join('; '); report.status='FAILED'; });
   if (rt) report.additionalArtifacts = rt.artifacts;
-  await persist(); console.log(`${report.status}: ${output}`); process.exitCode = !timedOut && report.status === 'ACTUAL_BROWSER_PASS' ? 0 : 1;
+  await persist(); await finishReporting(); process.exitCode = !timedOut && report.status === 'ACTUAL_BROWSER_PASS' ? 0 : 1;
 }

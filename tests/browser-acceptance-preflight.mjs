@@ -6,6 +6,7 @@ import { mkdir, mkdtemp, writeFile, access } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { platform, release } from 'node:os';
+import { safeDiagnostic } from './acceptance/reporting.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const base = resolve(root, 'tests/.acceptance-runs');
@@ -77,5 +78,6 @@ finally {
   for (const [name, text] of Object.entries(logs)) await writeFile(resolve(run, `${name}.log`), text);
   await writeFile(resolve(run, 'results.json'), JSON.stringify(results, null, 2));
   console.log(`${results.status}: ${run}`);
+  if (results.reason) console.log(`Preflight diagnostic: ${safeDiagnostic(results.reason)}`);
   process.exitCode = results.status === 'PREFLIGHT_PASS_ACCEPTANCE_NOT_RUN' ? 0 : 1;
 }

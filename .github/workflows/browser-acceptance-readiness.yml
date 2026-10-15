@@ -41,13 +41,19 @@ jobs:
       - name: Preflight then A–E (one browser, serial, zero retries)
         timeout-minutes: 18
         run: node tests/browser-acceptance.mjs
+      - name: Report missing harness output
+        if: always()
+        run: |
+          $reports = @(Get-ChildItem 'tests/.acceptance-runs/suite-*/artifacts/results.json' -File -Force -ErrorAction SilentlyContinue)
+          if ($reports.Count -eq 0) { Write-Output '::error::No harness report was produced under tests/.acceptance-runs/suite-*/artifacts/results.json' }
       - name: Collect only acceptance output files
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: windows-acceptance-readiness
           retention-days: 3
-          if-no-files-found: warn
+          include-hidden-files: true
+          if-no-files-found: error
           path: |
             tests/.acceptance-runs/run-*/results.json
             tests/.acceptance-runs/run-*/backend.log
