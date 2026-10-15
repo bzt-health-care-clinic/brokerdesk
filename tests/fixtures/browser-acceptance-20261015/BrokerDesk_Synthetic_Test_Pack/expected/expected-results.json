@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "synthetic": true,
+  "purpose": "Independent QA inputs; NOT insurance documents and NOT a BrokerDesk test result",
+  "status": "FIXTURES_VALIDATED_ONLY_APPLICATION_NOT_RUN",
+  "policy_assessment_date": "2026-10-01",
+  "notes": [
+    "No proprietary report template or customer data copied.",
+    "VIN and licence strings are deliberately constructed fixture identifiers.",
+    "Do not hardcode these subjects, filenames or values into production parsers.",
+    "Do not make newly created production cases use fixture values.",
+    "Training sample success does not establish real-world OCR accuracy.",
+    "Ground truth files may be used by assertions or a declared provider stub only; do not write answers directly into application state."
+  ],
+  "test_subjects": [
+    {
+      "id": "synthetic-driver-alpha",
+      "name": "ALPHA, TEST",
+      "licence": "T0000-00000-00001",
+      "dob": "1980-01-01"
+    },
+    {
+      "id": "synthetic-driver-beta",
+      "name": "BETA, TEST",
+      "licence": "T0000-00000-00002",
+      "dob": "1985-02-02"
+    }
+  ],
+  "vehicles": [
+    {
+      "id": "synthetic-vehicle-alpha",
+      "vin": "ZZZTESTA0T0000001",
+      "ownerSubjectId": "synthetic-driver-alpha"
+    },
+    {
+      "id": "synthetic-vehicle-beta",
+      "vin": "ZZZTESTB1T0000002",
+      "ownerSubjectId": "synthetic-driver-beta"
+    }
+  ],
+  "fixtures": [
+    {
+      "file": "fixtures/01_auto_quote_text.pdf",
+      "sha256": "8cf99f0dbea2795948af0069d0211e9de95c69dbdcf6de86e334fc66b8353974",
+      "bytes": 2467,
+      "pages": 1,
+      "embedded_text_chars_per_page": [
+        692
+      ]
+    },
+    {
+      "file": "fixtures/02_ownership_scan.pdf",
+      "sha256": "d67208729886bc3d1a3856e37c28279d8dc94990876d1f0d4a4343307d10f2b1",
+      "bytes": 184043,
+      "pages": 1,
+      "embedded_text_chars_per_page": [
+        0
+      ]
+    },
+    {
+      "file": "fixtures/02_ownership_scan.png",
+      "sha256": "5ebbbebe6b60234ed662962b29415b74a7daca1568a732b404ef2510fa63e0df",
+      "bytes": 152506
+    },
+    {
+      "file": "fixtures/03_mvr_two_drivers_text.pdf",
+      "sha256": "c69077c5d747569c2e4781a2b5004644f302c857f0439ca2af13d7ff965a387c",
+      "bytes": 3598,
+      "pages": 2,
+      "embedded_text_chars_per_page": [
+        518,
+        624
+      ]
+    },
+    {
+      "file": "fixtures/04_dash_two_reports_text.pdf",
+      "sha256": "795a3d9d34dd5d7ec05ba84b8e3f9d53ce7c2b060cbb8125d630d73e2f861516",
+      "bytes": 8409,
+      "pages": 6,
+      "embedded_text_chars_per_page": [
+        440,
+        501,
+        560,
+        439,
+        498,
+        645
+      ]
+    },
+    {
+      "file": "fixtures/05_mixed_auto_package.pdf",
+      "sha256": "ceb51f6b36349e9a7b6487ff9b54e25a77e3a2ee72998515641d341a26cf52cb",
+      "bytes": 196535,
+      "pages": 12,
+      "embedded_text_chars_per_page": [
+        692,
+        472,
+        397,
+        0,
+        440,
+        501,
+        560,
+        439,
+        498,
+        645,
+        518,
+        624
+      ]
+    },
+    {
+      "file": "fixtures/06_hab_mortgage_and_dates_text.pdf",
+      "sha256": "0556de0bdcf06b890a721bbb6965f122c145f2401b8d8525499c80dc1cd36c83",
+      "bytes": 2416,
+      "pages": 1,
+      "embedded_text_chars_per_page": [
+        720
+      ]
+    },
+    {
+      "file": "fixtures/07_policy_change_requests_text.pdf",
+      "sha256": "5a5e02518f82e17f254df738c7104339fd8a78059ea2074abfff65618f9fa54a",
+      "bytes": 4445,
+      "pages": 3,
+      "embedded_text_chars_per_page": [
+        441,
+        434,
+        606
+      ]
+    }
+  ],
+  "mixed_package_expected_sections": [
+    {
+      "pages": [
+        1,
+        1
+      ],
+      "type": "AUTO_QUOTE"
+    },
+    {
+      "pages": [
+        2,
+        2
+      ],
+      "type": "AUTO_APPLICATION",
+      "signature": "NOT_PROVIDED"
+    },
+    {
+      "pages": [
+        3,
+        3
+      ],
+      "type": "BILL_OF_SALE"
+    },
+    {
+      "pages": [
+        4,
+        4
+      ],
+      "type": "OWNERSHIP",
+      "extraction": "IMAGE_ONLY"
+    },
+    {
+      "pages": [
+        5,
+        7
+      ],
+      "type": "DASH_AUTOPLUS",
+      "subjectId": "synthetic-driver-alpha",
+      "reportId": "SYN-DASH-A"
+    },
+    {
+      "pages": [
+        8,
+        10
+      ],
+      "type": "DASH_AUTOPLUS",
+      "subjectId": "synthetic-driver-beta",
+      "reportId": "SYN-DASH-B"
+    },
+    {
+      "pages": [
+        11,
+        11
+      ],
+      "type": "MVR",
+      "subjectId": "synthetic-driver-alpha"
+    },
+    {
+      "pages": [
+        12,
+        12
+      ],
+      "type": "MVR",
+      "subjectId": "synthetic-driver-beta"
+    }
+  ],
+  "claims_expected": [
+    {
+      "reportId": "SYN-DASH-A",
+      "claimId": "SYN-CL-A",
+      "subjectId": "synthetic-driver-alpha",
+      "lossDate": "2017-09-28",
+      "faultPercent": 0,
+      "partyRole": "FIRST_PARTY",
+      "reportedLoss": 1000,
+      "historical_with_six_year_test_lookback": true
+    },
+    {
+      "reportId": "SYN-DASH-B",
+      "claimId": "SYN-CL-B",
+      "subjectId": "synthetic-driver-beta",
+      "lossDate": "2025-10-10",
+      "subjectPartyRole": "THIRD_PARTY",
+      "subjectFaultPercent": 100,
+      "firstPartyFault": null,
+      "reportedThirdPartyRecordLoss": 2200,
+      "do_not_relabel_as_subject_own_damage_loss": true
+    }
+  ],
+  "hab_expected": {
+    "mortgageCount": 1,
+    "mortgagee": "SYNTHETIC TEST LENDER",
+    "propertyInsuredSince": "2020-06-01",
+    "continuouslyInsuredSince": "2014-04-01",
+    "occupiedSince": "2020-05-20"
+  },
+  "policy_change_expected": {
+    "paymentPage": 1,
+    "cancellationPage": 2,
+    "explicitSeparateOperationsPage": 3,
+    "requestsAreNotProcessed": true,
+    "requiresExistingConfiguredEligibilityRules": true
+  },
+  "mvr_expected": [
+    {
+      "subjectId": "synthetic-driver-alpha",
+      "requestedDate": "2026-09-01",
+      "replyDate": "2026-09-01",
+      "class": "G",
+      "demeritPoints": 0,
+      "convictionCount": 0,
+      "conditions": "REQUIRES CORRECTIVE LENSES"
+    },
+    {
+      "subjectId": "synthetic-driver-beta",
+      "requestedDate": "2026-09-01",
+      "replyDate": "2026-09-02",
+      "class": "G",
+      "demeritPoints": 3,
+      "convictionCount": 1,
+      "convictions": [
+        {
+          "description": "SPEEDING",
+          "offenceDate": "2025-10-30",
+          "convictionDate": "2025-11-06"
+        }
+      ]
+    }
+  ]
+}

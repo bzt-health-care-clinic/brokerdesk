@@ -1,0 +1,321 @@
+{
+  "kind": "AUTHORING_GROUND_TRUTH_NOT_OCR_RESPONSE",
+  "source_file": "02_ownership_scan.pdf",
+  "page": 1,
+  "coordinate_system": "PDF points, top-left origin",
+  "page_width": 612.0,
+  "page_height": 792.0,
+  "text": "BROKERDESK QA  |  SYNTHETIC TEST ONLY\nOwnership Layout Exercise\nFictional bilingual fields. This is NOT an Ontario vehicle permit.\nNOT AN OFFICIAL DOCUMENT. NOT VALID FOR INSURANCE OR IDENTIFICATION.\nVEHICLE PORTION / PARTIE VEHICULE\nNAME / NOM\nALPHA, TEST\nADDRESS / ADRESSE\n100 TEST FIXTURE LANE\nCITY / PROVINCE\nEXAMPLEVILLE, ON\nPOSTAL CODE / CODE POSTAL\nA1A 1A1\nVIN / NIV\nZZZTESTA0T0000001\nYEAR / ANNEE\n2026\nMAKE / MARQUE\nTESTMOTOR\nMODEL / MODELE\nDEMO A\nPLATE / PLAQUE\nZZTS 001\nBODY TYPE\nSEDAN\nVEHICLE CLASS / STATUS\nPAS - FIT\nFORM INSTRUCTIONS - NOT FIELD VALUES\nPlease print clearly.\nOffice Use Only / A usage du bureau.\nFor address change, detach here.\nStreet name and number / lot, conc. and township.\n",
+  "blocks": [
+    {
+      "text": "BROKERDESK QA  |  SYNTHETIC TEST ONLY",
+      "bbox_pdf_points": [
+        36.0,
+        12.299999237060547,
+        254.37998962402344,
+        26.06999969482422
+      ]
+    },
+    {
+      "text": "Ownership Layout Exercise",
+      "bbox_pdf_points": [
+        36.0,
+        29.809999465942383,
+        258.97198486328125,
+        53.21900177001953
+      ]
+    },
+    {
+      "text": "Fictional bilingual fields. This is NOT an Ontario vehicle permit.",
+      "bbox_pdf_points": [
+        36.0,
+        76.32499694824219,
+        286.0740051269531,
+        88.69100189208984
+      ]
+    },
+    {
+      "text": "NOT AN OFFICIAL DOCUMENT. NOT VALID FOR INSURANCE OR IDENTIFICATION.",
+      "bbox_pdf_points": [
+        36.0,
+        755.4000244140625,
+        350.2559814453125,
+        766.3920288085938
+      ]
+    },
+    {
+      "text": "VEHICLE PORTION / PARTIE VEHICULE",
+      "bbox_pdf_points": [
+        44.0,
+        110.22999572753906,
+        253.03302001953125,
+        125.37699890136719
+      ]
+    },
+    {
+      "text": "NAME / NOM",
+      "bbox_pdf_points": [
+        42.0,
+        138.3000030517578,
+        103.11000061035156,
+        152.07000732421875
+      ]
+    },
+    {
+      "text": "ALPHA, TEST",
+      "bbox_pdf_points": [
+        231.0,
+        137.1750030517578,
+        301.3010559082031,
+        152.28900146484375
+      ]
+    },
+    {
+      "text": "ADDRESS / ADRESSE",
+      "bbox_pdf_points": [
+        42.0,
+        166.3000030517578,
+        147.5699920654297,
+        180.07000732421875
+      ]
+    },
+    {
+      "text": "100 TEST FIXTURE LANE",
+      "bbox_pdf_points": [
+        231.0,
+        165.1750030517578,
+        362.42803955078125,
+        180.28900146484375
+      ]
+    },
+    {
+      "text": "CITY / PROVINCE",
+      "bbox_pdf_points": [
+        42.0,
+        194.3000030517578,
+        125.34999084472656,
+        208.07000732421875
+      ]
+    },
+    {
+      "text": "EXAMPLEVILLE, ON",
+      "bbox_pdf_points": [
+        231.0,
+        193.1750030517578,
+        335.5440673828125,
+        208.28900146484375
+      ]
+    },
+    {
+      "text": "POSTAL CODE / CODE POSTAL",
+      "bbox_pdf_points": [
+        42.0,
+        222.3000030517578,
+        194.79998779296875,
+        236.07000732421875
+      ]
+    },
+    {
+      "text": "A1A 1A1",
+      "bbox_pdf_points": [
+        231.0,
+        221.1750030517578,
+        274.4170227050781,
+        236.28900146484375
+      ]
+    },
+    {
+      "text": "VIN / NIV",
+      "bbox_pdf_points": [
+        42.0,
+        250.3000030517578,
+        83.68000030517578,
+        264.07000732421875
+      ]
+    },
+    {
+      "text": "ZZZTESTA0T0000001",
+      "bbox_pdf_points": [
+        231.0,
+        249.1750030517578,
+        342.2649841308594,
+        264.28900146484375
+      ]
+    },
+    {
+      "text": "YEAR / ANNEE",
+      "bbox_pdf_points": [
+        42.0,
+        278.29998779296875,
+        113.12000274658203,
+        292.07000732421875
+      ]
+    },
+    {
+      "text": "2026",
+      "bbox_pdf_points": [
+        231.0,
+        277.17498779296875,
+        255.4639892578125,
+        292.28900146484375
+      ]
+    },
+    {
+      "text": "MAKE / MARQUE",
+      "bbox_pdf_points": [
+        42.0,
+        306.29998779296875,
+        124.22000122070312,
+        320.07000732421875
+      ]
+    },
+    {
+      "text": "TESTMOTOR",
+      "bbox_pdf_points": [
+        231.0,
+        305.17498779296875,
+        300.0580139160156,
+        320.28900146484375
+      ]
+    },
+    {
+      "text": "MODEL / MODELE",
+      "bbox_pdf_points": [
+        42.0,
+        334.29998779296875,
+        129.22999572753906,
+        348.07000732421875
+      ]
+    },
+    {
+      "text": "DEMO A",
+      "bbox_pdf_points": [
+        231.0,
+        333.17498779296875,
+        274.39501953125,
+        348.28900146484375
+      ]
+    },
+    {
+      "text": "PLATE / PLAQUE",
+      "bbox_pdf_points": [
+        42.0,
+        362.29998779296875,
+        124.78999328613281,
+        376.07000732421875
+      ]
+    },
+    {
+      "text": "ZZTS 001",
+      "bbox_pdf_points": [
+        231.0,
+        361.17498779296875,
+        279.9059753417969,
+        376.28900146484375
+      ]
+    },
+    {
+      "text": "BODY TYPE",
+      "bbox_pdf_points": [
+        42.0,
+        390.29998779296875,
+        99.78999328613281,
+        404.07000732421875
+      ]
+    },
+    {
+      "text": "SEDAN",
+      "bbox_pdf_points": [
+        231.0,
+        389.17498779296875,
+        268.8949890136719,
+        404.28900146484375
+      ]
+    },
+    {
+      "text": "VEHICLE CLASS / STATUS",
+      "bbox_pdf_points": [
+        42.0,
+        418.29998779296875,
+        170.35000610351562,
+        432.07000732421875
+      ]
+    },
+    {
+      "text": "PAS - FIT",
+      "bbox_pdf_points": [
+        231.0,
+        417.17498779296875,
+        279.2900695800781,
+        432.28900146484375
+      ]
+    },
+    {
+      "text": "FORM INSTRUCTIONS - NOT FIELD VALUES",
+      "bbox_pdf_points": [
+        44.0,
+        460.2300109863281,
+        277.4529724121094,
+        475.37701416015625
+      ]
+    },
+    {
+      "text": "Please print clearly.",
+      "bbox_pdf_points": [
+        43.0,
+        488.25,
+        130.25,
+        501.989990234375
+      ]
+    },
+    {
+      "text": "Office Use Only / A usage du bureau.",
+      "bbox_pdf_points": [
+        43.0,
+        507.25,
+        208.63995361328125,
+        520.989990234375
+      ]
+    },
+    {
+      "text": "For address change, detach here.",
+      "bbox_pdf_points": [
+        43.0,
+        526.25,
+        193.0799560546875,
+        539.989990234375
+      ]
+    },
+    {
+      "text": "Street name and number / lot, conc. and township.",
+      "bbox_pdf_points": [
+        43.0,
+        545.25,
+        266.449951171875,
+        558.989990234375
+      ]
+    }
+  ],
+  "expected_fields": {
+    "registeredOwner": "ALPHA, TEST",
+    "address": "100 TEST FIXTURE LANE, EXAMPLEVILLE, ON, A1A 1A1",
+    "vin": "ZZZTESTA0T0000001",
+    "year": 2026,
+    "make": "TESTMOTOR",
+    "model": "DEMO A",
+    "plate": "ZZTS 001",
+    "bodyType": "SEDAN",
+    "lessor": null,
+    "lienholder": null
+  },
+  "unknown_is_not_none": [
+    "lessor",
+    "lienholder"
+  ],
+  "reject_as_field_values": [
+    "Please print clearly.",
+    "Office Use Only",
+    "For address change, detach here.",
+    "PAS - FIT"
+  ]
+}

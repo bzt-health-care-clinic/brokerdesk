@@ -1,0 +1,168 @@
+BROKERDESK — AUTONOMOUS BROWSER ACCEPTANCE AFTER BATCH 2A
+
+Read this task and the existing STABILITY-CHECKPOINT.md. Batch 1 and Batch 2A
+have reported automated-test completion. Batch 2B and Batch 3 remain pending.
+Do not repeat the full audit or implement those pending batches in this task.
+
+The broker has no time to install/deploy software or manually exercise the UI.
+Your job is to run the actual existing app and produce browser-level evidence,
+not another static-inspection report. Use this supplied synthetic test pack.
+All records are invented QA data, not customer documents.
+
+1. ENVIRONMENT PREFLIGHT — DO THIS BEFORE WRITING MANY TESTS
+
+Inspect only package scripts, current startup configuration, existing test tools,
+and the checkpoint initially. Identify the current worktree/revision.
+
+Try to start BOTH the real local backend and the real Vite/vinext application
+in an isolated test environment, with a fresh disposable BROKERDESK_DATA_DIR,
+separate test ports, and a fresh browser profile. Use the actual app startup
+path so the PDF.js/SSR/Cloudflare/Vite boundary is exercised.
+
+Use Playwright with Chromium or equivalent available real browser tooling.
+Headless Chromium is acceptable. Do not substitute jsdom or source-string tests
+for browser execution.
+
+Do not reuse a service on the broker's normal ports. Do not read, modify, delete,
+migrate, or back up the broker's actual customer database for these tests.
+Bind test servers to loopback. Never expose them publicly.
+
+If process/browser installation or startup is denied by permissions/EPERM:
+- identify the exact command and policy/environment restriction;
+- request the narrow approved execution/network permission once if supported;
+- do not disable sandbox/security policy or repeatedly retry the same denial;
+- use an already authorized cloud/Linux test environment only if it actually
+  has this worktree and dependencies available;
+- do not claim moving to cloud automatically transfers local files or secrets;
+- if no executable environment is available, finish a runnable test entrypoint
+  and record BROWSER BLOCKED, not PASSED. State the single minimum setup or
+  approval needed. Do not ask the broker to install Docker/PaddleOCR.
+
+2. FIXTURES AND ASSERTION SAFETY
+
+Read expected/expected-results.json and README.md.
+Use fixtures/ as real uploaded PDF/PNG bytes, not as JSON imports that bypass
+PDF extraction.
+
+These are deliberately synthetic simple layouts. Unsupported layouts may
+legitimately require review. Record extraction quality separately from
+workflow correctness. Do not force all values to pass by special-casing these
+filenames, test people, VINs, or expected outputs in production code.
+
+The ownership PDF has no embedded text. The mixed 12-page package has exactly
+one image-only page (physical page 4). Other pages have selectable text.
+
+The application in the mixed package is intentionally UNSIGNED. Do not grant
+signed-document validity based on its document type or heading.
+
+An expected JSON file is test ground truth, not an OCR response. Never write
+its expected field values into application state to create a passing test.
+
+3. SEPARATE OFFLINE WORKFLOW TESTS FROM LIVE OCR
+
+Track test modes explicitly:
+A. REAL_BROWSER_LOCAL: actual browser, backend, PDF.js, parsers and SQLite.
+B. STUBBED_OCR: only the external provider response is a declared deterministic
+   test stub; real rendering/request path/parsing/persistence still runs.
+C. LIVE_OCR: real server-to-OCR.Space request using synthetic inputs only.
+
+Offline runs must block accidental external cloud OCR, even if a real key is
+present in .env.local. Prevent automatic upload OCR from leaking into offline
+runs. Reuse existing test injection if available; any added adapter must be
+explicitly test-only and never be a production default.
+
+For LIVE_OCR, use the existing authorized server-side key, if available, without
+printing, returning, committing, screenshotting, or placing it in browser code.
+Use only the bundled synthetic input. Maximum THREE total outgoing OCR
+requests for the entire live run, concurrency one, no automatic retries.
+Count all retries/automatic requests in that budget.
+Stop on authentication, quota or provider errors. No paid tier upgrade.
+If a key/network is unavailable, mark LIVE_OCR BLOCKED; still run the other tests.
+Do not upload any previous real client ownership/MVR/payment files to the cloud.
+
+Provider configured/ONLINE is not proof of successful remote OCR. Record an
+actual response status, character count and parsed-field result if a call runs.
+No raw credentials in logs or test traces.
+
+4. FIVE FOCUSED BROWSER SCENARIOS
+
+SCENARIO A — Case lifecycle and persistence
+- Start from an empty disposable database: no automatic case creation.
+- Change Auto/HAB/Policy Change selector: still zero cases.
+- Click + New case once: exactly one blank case, no sample insurance facts.
+- Create a second case; select/edit the older one: list order stays stable.
+- Preserve a note/manual entry across page reload and a REAL backend restart
+  against the same disposable data directory.
+- Delete the final test case: empty page, no replacement Auto case.
+Use valid configured completion conditions if testing KEYED/INCOMPLETE;
+do not bypass real blockers to make the status test pass.
+
+SCENARIO B — Searchable PDF, two drivers, report boundaries
+- Through UI uploads, use 01, 03 and 04 fixture PDFs in a fresh Auto case.
+- Use explicit test-driver creation/association through normal UI if needed;
+  name-only unassigned data should not silently target driver one.
+- Verify different MVR reply dates/demerits/convictions do not cross subjects.
+- Verify each three-page DASH stays together, but report A and B stay separate.
+- Verify the old claim remains visible despite zero recent claims in summary.
+- Verify third-party role and unknown first-party fault remain distinct.
+- Verify all claim views use the intended effective date, not a hardcoded date.
+- Searchable PDFs require zero external OCR calls.
+If UI prevents an association needed for safe review, record that usability gap.
+
+SCENARIO C — Actual PDF worker, scan and mixed package
+- Open 02_ownership_scan.pdf and exercise real browser rendering.
+- In STUBBED_OCR mode, return declared synthetic provider test data only at the
+  provider boundary; do not bypass rendering, ingestion or reconciliation.
+- In LIVE_OCR mode, use this scan only within the total request budget.
+- Upload 05_mixed_auto_package.pdf: analyze real pages, preserve original bytes,
+  and verify original-page provenance and separate MVR/DASH subjects.
+- Do not send the full 12-page PDF to cloud OCR. Only its scan page is eligible.
+- Parser-only refresh/reload/case switch makes zero additional OCR calls.
+- Failures appear on the document card, not a full-page runtime crash.
+
+SCENARIO D — Active evidence, manual sections and rename
+- In a test case, manually classify/edit a logical section.
+- Reparse: manual type/subject association remains intact.
+- Delete that section: its automatic facts stop contributing; siblings and
+  the physical source remain. Preserve manual decisions with withdrawn-source
+  review status where appropriate.
+- Rename a combined package via UI: originalFilename remains, current file
+  exists with accepted name, logical references still open after restart.
+Do not infer document validity from FOUND or from successful extraction.
+
+SCENARIO E — UI errors, controls and known pending findings
+- Capture pageerror, unhandled errors, worker failures, and failed local requests.
+- Exercise desktop and one narrow viewport; make a final bottom-control
+  screenshot. Check buttons are reachable and the giant empty region is absent.
+- File-picker automation and DOM drag/drop are distinct tests; do not claim
+  Windows Explorer-native drag validation from DOM event simulation.
+- Use 06/07 only to record current Batch 2B/3 baseline observations, NOT to mark
+  pending requirements complete or expand this task into those fixes.
+
+5. REPRODUCIBLE OUTPUT AND TOKEN CONTROL
+
+Use the existing test framework. Prefer one named repeatable command, one worker,
+retries=0, and a bounded run. Run failed-scenario retests after a justified small
+fix, not the entire historic suite repeatedly.
+
+Do not change business rules, thresholds, test assertions or fixture truth
+merely to turn failures green. Clear small defects in previously completed work
+may be fixed with focused tests. New large defects go into the checkpoint.
+
+Keep full logs in files, not the chat. Produce:
+- browser-test-report.md: scenario results and exact commands/revision;
+- machine-readable pass/fail/blocked/skipped results;
+- selected screenshots of real app states;
+- a retained failure trace, if supported;
+- OCR call counts by real/stubbed mode;
+- a precise note on test-server restart vs OS restart;
+- updated STABILITY-CHECKPOINT.md, keeping Batch 2B/3 pending.
+
+Final response maximum 400 words. Explicitly distinguish:
+ACTUAL_BROWSER_PASS / FAILED / BLOCKED / NOT_RUN,
+STUBBED_OCR versus LIVE_OCR,
+and synthetic-fixture testing versus real-client-document accuracy.
+
+Do not claim Windows production usability from a Linux-only test.
+Do not start PaddleOCR, cloud product deployment, multi-user auth, or new phases.
+Then STOP.

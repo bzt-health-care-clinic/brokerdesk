@@ -1,0 +1,15 @@
+{
+  "fixture_integrity": "PASS",
+  "pdf_page_count_across_files": 26,
+  "pdfs": 7,
+  "pngs": 1,
+  "raster_pdf_text_layer": "ABSENT_AS_INTENDED",
+  "mixed_pdf_pages": 12,
+  "mixed_pdf_raster_pages": [
+    4
+  ],
+  "visual_inspection": "26 rendered pages inspected in contact sheets",
+  "application_execution": "NOT_RUN",
+  "live_ocr": "NOT_RUN",
+  "repository_access": "NOT_AVAILABLE_IN_THIS_CHAT"
+}

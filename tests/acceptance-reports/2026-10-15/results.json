@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-15",
+  "overall": "BLOCKED",
+  "actualBrowser": "BLOCKED",
+  "backendStartup": "PASS",
+  "backendRestartEmptyDatabase": "PASS",
+  "browserPersistence": "NOT_RUN",
+  "frontendStartup": "BLOCKED_SPAWN_EPERM",
+  "separatePortOrigin": {"status": "FAILED", "httpStatus": 403},
+  "scenarios": {"A": "BLOCKED", "B": "BLOCKED", "C": "BLOCKED", "D": "BLOCKED", "E": "BLOCKED"},
+  "ocr": {"stubbed": {"status": "NOT_RUN", "requests": 0}, "live": {"status": "NOT_RUN", "requests": 0}},
+  "screenshots": [],
+  "trace": null,
+  "preflightEntrypoint": {"syntax": "PASS", "execution": "NOT_RUN"},
+  "customerDataTouched": false,
+  "testServersStopped": true,
+  "batch2B": "PENDING",
+  "batch3": "PENDING"
+}

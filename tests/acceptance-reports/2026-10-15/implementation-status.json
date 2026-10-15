@@ -1,0 +1,20 @@
+{
+  "status": "IMPLEMENTED_NOT_RUN",
+  "scenarios": {
+    "A": "IMPLEMENTED_NOT_RUN",
+    "B": "IMPLEMENTED_NOT_RUN",
+    "C": "IMPLEMENTED_NOT_RUN",
+    "D": "IMPLEMENTED_NOT_RUN",
+    "E": "IMPLEMENTED_NOT_RUN"
+  },
+  "BROWSER_EXECUTED": false,
+  "STUBBED_OCR": "IMPLEMENTED_NOT_RUN",
+  "LIVE_OCR": "DISABLED_NOT_RUN",
+  "liveOcrCalls": 0,
+  "stubbedOcrCalls": 0,
+  "syntaxCheck": "PASS",
+  "repositoryTypeScript": "PASS",
+  "screenshots": [],
+  "traces": [],
+  "command": "node tests/browser-acceptance.mjs"
+}

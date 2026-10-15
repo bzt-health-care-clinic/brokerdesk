@@ -1,0 +1,14 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { analyzePdfPackage, getBrowserPdfAdapter, packageFailureRecord, type PdfPageAdapter } from "../lib/package-analysis.ts";
+import type { UploadedDocumentRecord } from "../lib/extraction-types.ts";
+
+const adapterSource = readFileSync("lib/browser-pdf-adapter.ts", "utf8"); const packageSource = readFileSync("lib/package-analysis.ts", "utf8"); const componentSource = readFileSync("components/ingestion-panel.tsx", "utf8"); const projectSources = [adapterSource, packageSource, componentSource].join("\n");
+assert.match(adapterSource, /await import\("pdfjs-dist\/legacy\/build\/pdf\.mjs"\)/); assert.doesNotMatch(adapterSource, /^import \* as pdfjs/m); assert.match(adapterSource, /pdfjs-dist\/legacy\/build\/pdf\.worker\.min\.mjs\?url/); assert.match(adapterSource, /async close\(\) \{ await pdfDocument\.destroy\(\); \}/); assert.equal((projectSources.match(/GlobalWorkerOptions\.workerSrc/g) ?? []).length, 1); assert.doesNotMatch(projectSources, /file:\/\/|\/node_modules\/pdfjs-dist|new URL\("pdfjs-dist/); assert.doesNotMatch(projectSources, /disableWorker|fake worker/i);
+assert.match(packageSource, /typeof window === "undefined"/); assert.match(packageSource, /import\("\.\/browser-pdf-adapter"\)/); assert.doesNotMatch(componentSource, /from "@\/lib\/browser-pdf-adapter"/);
+await assert.rejects(getBrowserPdfAdapter, (error: unknown) => error instanceof Error && "code" in error && error.code === "PDF_BROWSER_RENDERER_UNAVAILABLE");
+assert.doesNotMatch(componentSource, /useState\(\(\) =>[^\n]*localStorage/); assert.match(componentSource, /useEffect\(\(\) => \{ setAutoOcr\(window\.localStorage/);
+const record = { id: "FAIL", fileName: "failure.pdf", mimeType: "application/pdf", size: 100, documentType: "OTHER", classification: { documentType: "OTHER", confidence: .1, reason: "test" }, state: "UPLOADED" } as UploadedDocumentRecord; const failingAdapter: PdfPageAdapter = { async open() { throw new Error("worker unavailable"); } };
+await assert.rejects(() => analyzePdfPackage(record, new File(["pdf"], "failure.pdf", { type: "application/pdf" }), failingAdapter, { async extract() { return {}; } }, { maxOcrBytes: 1000 }), /worker unavailable/); const fallback = packageFailureRecord(record, new Error("worker unavailable")); assert.equal(fallback.state, "NEEDS_REVIEW"); assert.equal(fallback.packageProgress?.status, "PARTIAL"); assert.match(fallback.error ?? "", /PDF page analysis failed/);
+assert.match(readFileSync("components/ingestion-panel.tsx", "utf8"), /catch \(error\) \{ const failed = await persistPackageFailure/); assert.match(readFileSync("components/ingestion-panel.tsx", "utf8"), /catch \(error\) \{ await persistPackageFailure\(record, error\); \}/);
+console.log("PDF worker targeted: passed.");

@@ -1,0 +1,66 @@
+import { DatabaseSync } from "node:sqlite";
+
+export function openDatabase(path) {
+  const db = new DatabaseSync(path);
+  db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS cases (
+      id TEXT PRIMARY KEY, label TEXT NOT NULL, insured_name TEXT NOT NULL DEFAULT '', case_type TEXT NOT NULL DEFAULT '',
+      carrier TEXT NOT NULL DEFAULT '', policy_number TEXT NOT NULL DEFAULT '', quote_number TEXT NOT NULL DEFAULT '',
+      vin TEXT NOT NULL DEFAULT '', client_code TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'new',
+      case_json TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS documents (
+      id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+      original_filename TEXT NOT NULL, stored_filename TEXT NOT NULL, relative_path TEXT NOT NULL UNIQUE,
+      mime_type TEXT NOT NULL, size INTEGER NOT NULL, document_type TEXT NOT NULL,
+      parse_status TEXT NOT NULL, validation_status TEXT NOT NULL, record_json TEXT NOT NULL,
+      uploaded_at TEXT NOT NULL, updated_at TEXT NOT NULL, replaced_by TEXT, deleted_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS notes (
+      id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+      note_type TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS logical_documents (
+      id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+      physical_file_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+      document_type TEXT NOT NULL, title TEXT NOT NULL, start_page INTEGER, end_page INTEGER,
+      subject_name TEXT, subject_type TEXT, presence_status TEXT NOT NULL DEFAULT 'FOUND',
+      parse_status TEXT NOT NULL DEFAULT 'NOT_EVALUATED', validation_status TEXT NOT NULL DEFAULT 'NOT_EVALUATED',
+      classification_source TEXT NOT NULL DEFAULT 'MANUAL', classification_confidence REAL,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS ocr_jobs (
+      id TEXT PRIMARY KEY, case_id TEXT REFERENCES cases(id) ON DELETE CASCADE, document_id TEXT REFERENCES documents(id) ON DELETE CASCADE,
+      status TEXT NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT, document_id TEXT, actor TEXT NOT NULL,
+      action TEXT NOT NULL, details_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_cases_archived_updated ON cases(archived, updated_at DESC) WHERE deleted_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_cases_archived_created ON cases(archived, created_at DESC, id DESC) WHERE deleted_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_cases_search_insured ON cases(insured_name);
+    CREATE INDEX IF NOT EXISTS idx_documents_case ON documents(case_id, uploaded_at) WHERE deleted_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_logical_documents_physical ON logical_documents(physical_file_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_case ON audit_events(case_id, created_at);
+    PRAGMA optimize;
+  `);
+  if (!db.prepare("PRAGMA table_info(logical_documents)").all().some(column => column.name === "subject_id")) db.exec("ALTER TABLE logical_documents ADD COLUMN subject_id TEXT");
+  if (!db.prepare("PRAGMA table_info(logical_documents)").all().some(column => column.name === "document_subtype")) {
+    db.exec("ALTER TABLE logical_documents ADD COLUMN document_subtype TEXT");
+    // Recover only an explicitly stored subtype; missing legacy values stay NULL.
+    db.exec(`UPDATE logical_documents SET document_subtype=(
+      SELECT json_extract(section.value,'$.documentSubtype')
+      FROM documents d, json_each(d.record_json,'$.logicalDocuments') section
+      WHERE d.id=logical_documents.physical_file_id AND json_extract(section.value,'$.id')=logical_documents.id
+        AND json_type(section.value,'$.documentSubtype')='text' LIMIT 1
+    ) WHERE document_subtype IS NULL`);
+  }
+  return db;
+}
+
+export function audit(db, action, { caseId = null, documentId = null, details = {} } = {}) {
+  db.prepare("INSERT INTO audit_events(case_id,document_id,actor,action,details_json,created_at) VALUES(?,?,?,?,?,?)")
+    .run(caseId, documentId, "Local User", action, JSON.stringify(details), new Date().toISOString());
+}

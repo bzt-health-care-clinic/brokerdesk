@@ -1,0 +1,64 @@
+name: BrokerDesk synthetic A–E acceptance
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  readiness:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse customer environment files
+        run: |
+          foreach ($file in @('.env', '.env.local', '.env.development', '.env.development.local')) {
+            if (Test-Path -LiteralPath $file) { throw 'Do not supply application environment files to acceptance CI' }
+          }
+          if (-not (Test-Path 'tests/fixtures/browser-acceptance-20261015/BrokerDesk_Synthetic_Test_Pack/expected/expected-results.json')) { throw 'Synthetic pack missing' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked application dependencies
+        timeout-minutes: 8
+        run: npm ci --include=dev --include=optional --no-audit --no-fund
+      - name: Install browser tooling from locked Next peer baseline
+        timeout-minutes: 4
+        run: |
+          # Playwright is not installed in the application lockfile. Use the
+          # exact minimum of Next's locked optional peer range, not latest.
+          $browserVersion = node --input-type=module -e "import fs from 'node:fs'; const l=JSON.parse(fs.readFileSync('package-lock.json')); const p=l.packages['node_modules/next'].peerDependencies['@playwright/test']; const m=/^\^?(\d+\.\d+\.\d+)$/.exec(p); if(!m) throw Error('Review browser version range'); console.log(m[1]);"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund "playwright@$browserVersion"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node node_modules/playwright/cli.js install chromium
+      - name: Targeted origin checks
+        timeout-minutes: 2
+        run: node tests/local-origins.mjs
+      - name: Preflight then A–E (one browser, serial, zero retries)
+        timeout-minutes: 18
+        run: node tests/browser-acceptance.mjs
+      - name: Collect only acceptance output files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-acceptance-readiness
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            tests/.acceptance-runs/run-*/results.json
+            tests/.acceptance-runs/run-*/backend.log
+            tests/.acceptance-runs/run-*/frontend.log
+            tests/.acceptance-runs/run-*/smoke.png
+            tests/.acceptance-runs/run-*/smoke-trace.zip
+            tests/.acceptance-runs/suite-*/artifacts/results.json
+            tests/.acceptance-runs/suite-*/artifacts/browser-test-report.md
+            tests/.acceptance-runs/suite-*/artifacts/report.html
+            tests/.acceptance-runs/suite-*/artifacts/preflight.log
+            tests/.acceptance-runs/suite-*/artifacts/*-final.png
+            tests/.acceptance-runs/suite-*/artifacts/*-trace.zip
+            tests/.acceptance-runs/ae-*/artifacts/*.log
+            tests/.acceptance-runs/ae-*/artifacts/E-*.png
