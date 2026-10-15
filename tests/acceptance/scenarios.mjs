@@ -3,6 +3,7 @@ import { readFile, access } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { api, backend, frontend, expected, fixture, sha, poll } from './runtime.mjs';
+import { acceptedSuggestionsPersisted, responseDuring, selectedCaseMatches } from './harness-state.mjs';
 
 export const names = {
   A: 'Case lifecycle and persistence', B: 'Searchable PDF, two drivers, report boundaries',
@@ -32,7 +33,11 @@ export async function runScenario(id, page, rt, result) {
   }
   async function selectCase(caseId) {
     const c = await saved(caseId); await page.locator('.local-case-list').getByRole('button').filter({ hasText: c.label }).click();
-    await poll(async () => (await page.locator('.case-title .eyebrow').innerText()).includes(caseId), 'selected case');
+    await poll(async () => {
+      const active = page.locator('.local-case-list button[aria-current="page"]');
+      if (await active.count() !== 1) return false;
+      return selectedCaseMatches(await active.locator('strong').textContent(), await page.locator('.case-title .eyebrow').textContent(), c.label, caseId);
+    }, 'selected case identity and active state');
   }
   async function upload(caseId, files, drop = false) {
     const before = (await docs(caseId)).map(d => d.id);
@@ -56,14 +61,30 @@ export async function runScenario(id, page, rt, result) {
   }
   async function reparse(caseId, doc) {
     const before = rt.calls.length;
-    const put = page.waitForResponse(r => r.url() === `${backend}/documents/${doc.id}` && r.request().method() === 'PUT');
-    await card(doc).getByRole('button', { name: 'Reparse saved text (local)', exact: true }).click(); assert((await put).ok());
+    const put = await responseDuring(page, r => r.url() === `${backend}/documents/${doc.id}` && r.request().method() === 'PUT',
+      () => card(doc).getByRole('button', { name: 'Reparse saved text (local)', exact: true }).click()); assert(put.ok());
     await poll(async () => (await docs(caseId)).find(d => d.id === doc.id), 'reparsed saved record'); assert.equal(rt.calls.length, before);
   }
   async function acceptSuggestions(caseId, doc) {
     if ((doc.suggestedSections ?? []).some(s => s.suggestionStatus === 'PENDING')) {
-      const response = page.waitForResponse(r => r.url() === `${backend}/documents/${doc.id}` && r.request().method() === 'PUT');
-      await card(doc).getByRole('button', { name: 'Accept all', exact: true }).click(); assert((await response).ok());
+      const target = `${backend}/documents/${doc.id}`;
+      const observed = { requests: 0, statuses: [], failures: [] };
+      const matches = request => request.url() === target && request.method() === 'PUT';
+      const onRequest = request => { if (matches(request)) observed.requests++; };
+      const onResponse = response => { if (matches(response.request())) observed.statuses.push(response.status()); };
+      const onFailure = request => { if (matches(request)) observed.failures.push(request.failure()?.errorText ?? 'unknown failure'); };
+      page.on('request', onRequest); page.on('response', onResponse); page.on('requestfailed', onFailure);
+      try {
+        await card(doc).getByRole('button', { name: 'Accept all', exact: true }).click();
+        return await poll(async () => {
+          const after = (await docs(caseId)).find(savedDoc => savedDoc.id === doc.id);
+          return acceptedSuggestionsPersisted(doc, after) && after;
+        }, 'accepted sections persisted', 60000);
+      } catch (error) {
+        throw new Error(`Accept all did not persist: ${error.message}; PUT requests=${observed.requests}, statuses=${observed.statuses.join(',') || 'none'}, failures=${observed.failures.join(',') || 'none'}`, { cause: error });
+      } finally {
+        page.off('request', onRequest); page.off('response', onResponse); page.off('requestfailed', onFailure);
+      }
     }
     return (await docs(caseId)).find(d => d.id === doc.id);
   }
@@ -71,9 +92,8 @@ export async function runScenario(id, page, rt, result) {
     const c = await saved(caseId); const index = c.drivers.findIndex(d => d.id === driver.id); assert(index >= 0);
     await card(doc).locator('summary').filter({ hasText: /^Manage sections$/ }).click();
     const row = card(doc).locator('.section-manager:not(.suggested-sections) article').filter({ hasText: section.startPage === section.endPage ? `Page ${section.startPage} ·` : `Pages ${section.startPage}–${section.endPage}` });
-    const response = page.waitForResponse(r => r.url() === `${backend}/documents/${doc.id}` && r.request().method() === 'PUT');
-    await prompts(() => row.getByRole('button', { name: 'Edit', exact: true }).click(), (m, fallback) => m.startsWith('Driver or vehicle') ? driver.name : m.startsWith('Subject type') ? 'DRIVER' : m.startsWith('Associate section') ? String(index + 1) : fallback);
-    assert((await response).ok());
+    const response = await responseDuring(page, r => r.url() === `${backend}/documents/${doc.id}` && r.request().method() === 'PUT',
+      () => prompts(() => row.getByRole('button', { name: 'Edit', exact: true }).click(), (m, fallback) => m.startsWith('Driver or vehicle') ? driver.name : m.startsWith('Subject type') ? 'DRIVER' : m.startsWith('Associate section') ? String(index + 1) : fallback)); assert(response.ok());
     await card(doc).locator('summary').filter({ hasText: /^Manage sections$/ }).click();
   }
   async function reports(caseId, uploaded, mixed = false) {
@@ -161,9 +181,8 @@ export async function runScenario(id, page, rt, result) {
     await step('Manual section edit and local reparse retain classification/association', async () => {
       await card(doc).locator('summary').filter({ hasText: /^Manage sections$/ }).click();
       const row = card(doc).locator('.section-manager:not(.suggested-sections) article').nth(doc.logicalDocuments.findIndex(s => s.id === section.id));
-      const put = page.waitForResponse(r => r.url() === `${backend}/documents/${doc.id}` && r.request().method() === 'PUT');
-      await prompts(() => row.getByRole('button', { name: 'Edit', exact: true }).click(), (m, fallback) => m.startsWith('Driver or vehicle') ? 'Synthetic manually reviewed section' : m.startsWith('Subject type') ? 'DRIVER' : m.startsWith('Associate section') ? '1' : fallback);
-      assert((await put).ok()); doc = (await docs(caseId)).find(d => d.id === doc.id); const manual = doc.logicalDocuments.find(s => s.id === section.id); assert.equal(manual.classificationSource, 'MANUAL');
+      const put = await responseDuring(page, r => r.url() === `${backend}/documents/${doc.id}` && r.request().method() === 'PUT',
+        () => prompts(() => row.getByRole('button', { name: 'Edit', exact: true }).click(), (m, fallback) => m.startsWith('Driver or vehicle') ? 'Synthetic manually reviewed section' : m.startsWith('Subject type') ? 'DRIVER' : m.startsWith('Associate section') ? '1' : fallback)); assert(put.ok()); doc = (await docs(caseId)).find(d => d.id === doc.id); const manual = doc.logicalDocuments.find(s => s.id === section.id); assert.equal(manual.classificationSource, 'MANUAL');
       await reparse(caseId, doc); const after = (await docs(caseId)).find(d => d.id === doc.id).logicalDocuments.find(s => s.id === section.id); assert.equal(after.documentType, manual.documentType); assert.equal(after.subjectId, manual.subjectId); assert.equal(after.subjectName, manual.subjectName);
     });
     await step('Manual decision survives source withdrawal with review flag', async () => {
@@ -178,15 +197,15 @@ export async function runScenario(id, page, rt, result) {
     await step('Deleting section withdraws automatic facts; siblings/file remain', async () => {
       doc = (await docs(caseId)).find(d => d.id === doc.id);
       const manager = card(doc).locator('.section-manager:not(.suggested-sections)'); if ((await manager.getAttribute('open')) === null) await manager.locator('summary').click();
-      const put = page.waitForResponse(r => r.url() === `${backend}/documents/${doc.id}` && r.request().method() === 'PUT');
-      await manager.locator('article').nth(doc.logicalDocuments.findIndex(s => s.id === section.id)).getByRole('button', { name: 'Delete section', exact: true }).click(); assert((await put).ok());
+      const put = await responseDuring(page, r => r.url() === `${backend}/documents/${doc.id}` && r.request().method() === 'PUT',
+        () => manager.locator('article').nth(doc.logicalDocuments.findIndex(s => s.id === section.id)).getByRole('button', { name: 'Delete section', exact: true }).click()); assert(put.ok());
       await poll(async () => !(await saved(caseId)).field_sources.some(f => f.values.some(v => v.documentId === doc.id && v.logicalDocumentId === section.id)), 'active source withdrawn');
       doc = (await docs(caseId)).find(d => d.id === doc.id); assert.deepEqual(doc.logicalDocuments.map(s => s.id), siblings); assert(!(doc.parsedSources ?? []).some(s => s.logicalDocumentId === section.id)); await bytesKept(doc, '05_mixed_auto_package.pdf');
       if (result.manualDecision) { const decision = (await saved(caseId)).field_sources.find(f => f.field === result.manualDecision.field); assert.equal(decision?.resolved_value, result.manualDecision.value); if (result.manualDecision.sources.some(v => v.logicalDocumentId === section.id)) assert(decision.evidenceReview); }
     });
     await step('Rename and actual backend restart preserve physical/logical identity', async () => {
-      const response = page.waitForResponse(r => r.url() === `${backend}/documents/${doc.id}/rename`);
-      await prompts(() => card(doc).getByRole('button', { name: 'Rename', exact: true }).click(), () => 'Synthetic combined reviewed.pdf'); assert((await response).ok());
+      const response = await responseDuring(page, r => r.url() === `${backend}/documents/${doc.id}/rename`,
+        () => prompts(() => card(doc).getByRole('button', { name: 'Rename', exact: true }).click(), () => 'Synthetic combined reviewed.pdf')); assert(response.ok());
       result.restart = await rt.restart(); await page.reload(); doc = (await docs(caseId)).find(d => d.id === doc.id); assert.equal(doc.originalFileName, '05_mixed_auto_package.pdf'); assert.equal(doc.currentFileName, 'Synthetic combined reviewed.pdf'); assert.deepEqual(doc.logicalDocuments.map(s => s.id), siblings); await bytesKept(doc, '05_mixed_auto_package.pdf'); await card(doc).waitFor();
       const popup = page.waitForEvent('popup'); await card(doc).getByRole('button', { name: 'Open', exact: true }).click(); const opened = await popup; await opened.waitForLoadState(); assert(opened.url().includes(`/documents/${doc.id}/file`)); await opened.close();
     });

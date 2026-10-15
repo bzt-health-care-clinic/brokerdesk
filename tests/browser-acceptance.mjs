@@ -53,26 +53,32 @@ try {
     rt = await createRuntime(); await rt.start();
     const { chromium } = await import('playwright'); browser = await chromium.launch({ headless: true }); report.BROWSER_EXECUTED = true;
     for (const scenario of report.scenarios) {
-      await rt.reset(scenario.id);
-      const context = await browser.newContext({ viewport: { width:1440,height:1000 }, serviceWorkers: 'block' });
-      await context.route('**/*', route => { const url = new URL(route.request().url()); return [frontend,backend].includes(url.origin) ? route.continue() : route.abort('blockedbyclient'); });
-      await context.tracing.start({ screenshots:true, snapshots:true, sources:false });
-      const page = await context.newPage(); page.setDefaultTimeout(12000); page.setDefaultNavigationTimeout(60000);
-      page.on('worker', worker => scenario.workers.push(worker.url()));
-      page.on('pageerror', e => scenario.errors.push({ kind:'pageerror', message:e.message }));
-      page.on('console', m => { if (m.type() === 'error') scenario.errors.push({ kind:'console', message:m.text() }); });
-      page.on('requestfailed', r => scenario.failedRequests.push({ url:r.url(), reason:r.failure()?.errorText }));
-      page.on('response', r => { if (r.status() >= 400) scenario.failedRequests.push({ url:r.url(), status:r.status(), expectedProviderFailure: scenario.id === 'C' && r.url() === `${backend}/ocr-space` && rt.calls.at(-1)?.expectedFailure === true }); });
+      let context, page, tracingStarted = false;
       scenario.status = 'RUNNING'; await persist();
-      try { await runScenario(scenario.id, page, rt, scenario); }
+      try {
+        await rt.reset(scenario.id);
+        context = await browser.newContext({ viewport: { width:1440,height:1000 }, serviceWorkers: 'block' });
+        await context.route('**/*', route => { const url = new URL(route.request().url()); return [frontend,backend].includes(url.origin) ? route.continue() : route.abort('blockedbyclient'); });
+        await context.tracing.start({ screenshots:true, snapshots:true, sources:false }); tracingStarted = true;
+        page = await context.newPage(); page.setDefaultTimeout(12000); page.setDefaultNavigationTimeout(60000);
+        page.on('worker', worker => scenario.workers.push(worker.url()));
+        page.on('pageerror', e => scenario.errors.push({ kind:'pageerror', message:e.message }));
+        page.on('console', m => { if (m.type() === 'error') scenario.errors.push({ kind:'console', message:m.text() }); });
+        page.on('requestfailed', r => scenario.failedRequests.push({ url:r.url(), reason:r.failure()?.errorText }));
+        page.on('response', r => { if (r.status() >= 400) scenario.failedRequests.push({ url:r.url(), status:r.status(), expectedProviderFailure: scenario.id === 'C' && r.url() === `${backend}/ocr-space` && rt.calls.at(-1)?.expectedFailure === true }); });
+        await runScenario(scenario.id, page, rt, scenario);
+      }
       catch (e) { scenario.checks.push({ name:'Scenario setup/continuation', status:'FAILED', error:e.stack }); }
       finally {
         const unexpected = scenario.failedRequests.filter(r => !r.expectedProviderFailure);
         const unexpectedErrors = scenario.errors.filter(e => !(scenario.id === 'C' && rt.calls.some(c => c.expectedFailure) && /^Failed to load resource: the server responded with a status of 502/.test(e.message)));
         scenario.checks.push({ name:'No unhandled scripts, worker failures or unexpected failed requests', status: unexpectedErrors.length || unexpected.length ? 'FAILED' : 'PASS' });
         scenario.status = scenario.checks.some(c => c.status !== 'PASS') ? 'FAILED' : 'ACTUAL_BROWSER_PASS';
-        await page.screenshot({ path:resolve(output, `${scenario.id}-final.png`), fullPage:true }).catch(e => { scenario.checks.push({ name:'Final screenshot', status:'FAILED', error:e.message }); scenario.status='FAILED'; });
-        await context.tracing.stop({ path:resolve(output, `${scenario.id}-trace.zip`) }); await context.close(); await persist();
+        await persist();
+        if (page) await page.screenshot({ path:resolve(output, `${scenario.id}-final.png`), fullPage:true }).catch(e => { scenario.checks.push({ name:'Final screenshot', status:'FAILED', error:e.message }); scenario.status='FAILED'; });
+        if (tracingStarted) await context.tracing.stop({ path:resolve(output, `${scenario.id}-trace.zip`) }).catch(e => { scenario.checks.push({ name:'Trace capture', status:'FAILED', error:e.message }); scenario.status='FAILED'; });
+        if (context) await context.close().catch(e => { scenario.checks.push({ name:'Browser context cleanup', status:'FAILED', error:e.message }); scenario.status='FAILED'; });
+        await persist();
       }
     }
     report.status = report.scenarios.every(s => s.status === 'ACTUAL_BROWSER_PASS') ? 'ACTUAL_BROWSER_PASS' : 'FAILED';
