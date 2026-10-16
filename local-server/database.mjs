@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
@@ -104,4 +104,38 @@ export function migrateSourceHashBaselines(db, baseDir) {
     throw error;
   }
   return updated;
+}
+
+// One-time, idempotent backfill of logical_documents rows for document records
+// that have none (legacy rows created before logical documents existed). Mirrors
+// the "MIGRATED" branch of syncLogicalDocuments, but is INSERT-only: existing rows
+// are never touched and nothing is deleted. Run once at server startup so
+// listDocuments can stay a pure read. INSERT OR IGNORE guards against duplicate
+// ids inside a single legacy record without failing the whole migration.
+export function migrateLogicalDocuments(db) {
+  const missing = db.prepare(
+    "SELECT d.id, d.case_id, d.record_json FROM documents d WHERE d.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM logical_documents l WHERE l.physical_file_id = d.id)"
+  ).all();
+  if (!missing.length) return 0;
+  let inserted = 0;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const insert = db.prepare("INSERT OR IGNORE INTO logical_documents(id,case_id,physical_file_id,document_type,title,start_page,end_page,subject_name,subject_type,subject_id,document_subtype,presence_status,parse_status,validation_status,classification_source,classification_confidence,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    for (const row of missing) {
+      let record;
+      try { record = JSON.parse(row.record_json); } catch { continue; }
+      const ts = new Date().toISOString();
+      let items = record.logicalDocuments;
+      if (items === undefined) items = [{ id: randomUUID(), physicalFileId: row.id, documentType: record.documentType, title: record.fileName, startPage: 1, endPage: record.pageCount, presenceStatus: "FOUND", parseStatus: record.state === "PARSED" ? "PARSED" : record.state === "FAILED" ? "FAILED" : "NOT_EVALUATED", validationStatus: record.validation?.validationStatus === "COMPLETE" ? "VALID" : "NOT_EVALUATED", classificationConfidence: record.classification?.confidence, createdAt: ts, updatedAt: ts }];
+      for (const item of items) {
+        const result = insert.run(item.id || randomUUID(), row.case_id, row.id, item.documentType, item.title || item.documentType, item.startPage ?? null, item.endPage ?? item.startPage ?? null, item.subjectName ?? null, item.subjectType ?? null, item.subjectId ?? null, item.documentSubtype ?? null, item.presenceStatus || "FOUND", item.parseStatus || "NOT_EVALUATED", item.validationStatus || "NOT_EVALUATED", item.classificationSource || "MIGRATED", item.classificationConfidence ?? null, item.createdAt || ts, ts);
+        inserted += result.changes;
+      }
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return inserted;
 }

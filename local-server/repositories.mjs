@@ -67,7 +67,10 @@ export class LocalRepositories {
     // Legacy uploads are bound to an immutable document id; keep the baseline in memory only.
     // (No read-time UPDATE: a read must not write, and the hash cache makes recompute cheap.)
     if (!record.sourceHash) record.sourceHash = currentSourceHash;
-    let logicalDocuments = this.logicalDocuments(row.id); if (!logicalDocuments.length) logicalDocuments = this.syncLogicalDocuments(caseId, row.id, record, "MIGRATED"); return { ...record, currentSourceHash, originalFileName: row.original_filename, currentFileName: row.stored_filename, logicalDocuments }; }); }
+    // Read path must not write: missing logical documents are backfilled by the
+    // one-time migrateLogicalDocuments() at server startup. Return whatever the
+    // table has (possibly empty) instead of synthesizing rows on read.
+    const logicalDocuments = this.logicalDocuments(row.id); return { ...record, currentSourceHash, originalFileName: row.original_filename, currentFileName: row.stored_filename, logicalDocuments }; }); }
   getDocument(id) { return this.db.prepare("SELECT * FROM documents WHERE id=? AND deleted_at IS NULL").get(safeId(id, "document id")); }
   saveDocument(caseId, record, bytes, originalFilename, action = "UPLOAD_DOCUMENT", replacedDocumentId = null) {
     record = { ...record, sourceHash: createHash("sha256").update(bytes).digest("hex") };

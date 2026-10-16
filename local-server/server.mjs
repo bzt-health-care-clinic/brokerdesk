@@ -1,7 +1,7 @@
 import http from "node:http";
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { openDatabase, migrateSourceHashBaselines } from "./database.mjs";
+import { openDatabase, migrateSourceHashBaselines, migrateLogicalDocuments } from "./database.mjs";
 import { resolveDataPaths } from "./paths.mjs";
 import { LocalRepositories } from "./repositories.mjs";
 import { ocrSpaceHealth, requestOcrSpace } from "./ocr-space.mjs";
@@ -15,6 +15,10 @@ const db = openDatabase(paths.database);
 // One-time backfill of sourceHash integrity baselines for legacy document rows.
 // Idempotent: only rows missing $.sourceHash are touched; afterwards it is a no-op.
 migrateSourceHashBaselines(db, paths.base);
+// One-time backfill of logical_documents rows for legacy documents. Idempotent:
+// only documents with no logical_documents rows are touched; afterwards this is
+// a no-op and listDocuments stays a pure read.
+migrateLogicalDocuments(db);
 const repositories = new LocalRepositories(db, paths);
 repositories.cleanTemp();
 const host = "127.0.0.1";
