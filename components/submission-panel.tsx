@@ -178,7 +178,7 @@ export function SubmissionPanel({data,records,saveState,onCaseSaved,onNavigate}:
       <Button size="sm" variant="outline" disabled={busy||saveState!=="saved"}
         onClick={()=>void runPreflight()}>Run intake preflight</Button>
       {preflight&&<p role="status"><strong>{preflight.passed?"Passed":"Blocked"}</strong> · {preflight.blockers.length} blocker(s) · {preflight.system}</p>}
-      {preflight?.warnings?.length>0&&<p className="pilot-warning-head">Warnings ({preflight.warnings.length}) · submission is allowed if blockers are zero.</p>}
+      {(preflight?.warnings?.length ?? 0)>0&&<p className="pilot-warning-head">Warnings ({preflight?.warnings?.length ?? 0}) · submission is allowed if blockers are zero.</p>}
       {preflight?.warnings?.map((warning,i)=><div key={warning.code+"-"+i} className="pilot-preflight-warning" role="status"><strong>{warning.code}</strong> {warning.message}</div>)}
       {preflight?.blockers.map((b,i)=><div key={i} className="pilot-preflight-issue">
         <strong>{b.code}</strong> {b.message}
