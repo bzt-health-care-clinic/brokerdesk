@@ -82,8 +82,10 @@ export default function Home() {
   const documentUploadRef = useRef<HTMLInputElement>(null);
   const centerPanelRef = useRef<HTMLElement>(null);
   const [documentsPanelWidth, setDocumentsPanelWidth] = useState(DOCUMENT_PANEL_DEFAULT);
+  const [signedDocChoice, setSignedDocChoice] = useState<string | undefined>(undefined);
 
   useEffect(() => { setDocumentsPanelWidth(clampDocumentPanelWidth(Number(window.localStorage.getItem("brokerdesk.documentsPanelWidth")) || DOCUMENT_PANEL_DEFAULT)); }, []);
+  useEffect(() => { setSignedDocChoice(undefined); }, [selectedCaseId]);
 
   function beginDocumentsResize(event: React.PointerEvent<HTMLDivElement>) {
     if (window.innerWidth <= 1250) return;
@@ -106,6 +108,7 @@ export default function Home() {
   const confirm = activeAlerts.filter((item) => item.severity !== "high");
   const isHab = Boolean(caseData.habitational_risk);
   const visibleDocs = caseData.documents.filter((doc) => doc.name.toLowerCase().includes(search.toLowerCase()));
+  const signedAppDocs = caseData.documents.filter((doc) => doc.category === "signed_application" && doc.received);
 
   async function refreshCaseList(query = caseSearch, archived = showArchived) {
     const items = await localRepositories.cases.list(query, archived);
@@ -269,6 +272,23 @@ export default function Home() {
       setCaseData(previous); setSaveState("failed");
     }
   }
+  // "Signed application verified" is a manual broker action only. Verified 2026-10-16:
+  // nothing in reconciliation, OCR, document ingestion or JSON import logic ever sets
+  // signed=true on its own — the broker ticks the box after visually verifying the
+  // signed document. Every change is audit-logged (SIGNED_VERIFIED / SIGNED_UNVERIFIED)
+  // and persists through the normal autosave path.
+  function toggleSignedVerified(verified: boolean) {
+    if (verified) {
+      const documentId = signedDocChoice ?? signedAppDocs[0]?.id;
+      const verifiedAt = new Date().toISOString();
+      setCaseData((current) => ({ ...current, signed: true, signed_verified_at: verifiedAt, signed_document_id: documentId }));
+      void localRepositories.cases.recordAction(caseData.case_id, "SIGNED_VERIFIED", { documentId: documentId ?? null, verifiedAt });
+    } else {
+      setCaseData((current) => ({ ...current, signed: false, signed_verified_at: undefined, signed_document_id: undefined }));
+      setSignedDocChoice(undefined);
+      void localRepositories.cases.recordAction(caseData.case_id, "SIGNED_UNVERIFIED", {});
+    }
+  }
   async function markComplete() {
     if (isPolicyChange(caseData) && !policyChangeCanComplete(caseData)) { window.alert("This policy change still has a blocker or pending underwriting approval."); return; }
     if (!isPolicyChange(caseData)) {
@@ -345,7 +365,7 @@ export default function Home() {
 
         <section ref={centerPanelRef} className="keyin-panel panel">
           {carrierRuleFor(caseData.policy.company)?.groupDiscountFirst && <GroupDiscountCard validation={groupReview.validation} onSelect={setGroupSelected} onConfirmMembership={confirmMembership} />}
-          <div className="case-title"><div><p className="eyebrow">{caseData.case_id} · {titleCase(caseData.case_type)}</p><h1>{caseData.insured.name || "Unnamed client"}</h1><p>{caseData.policy.company || "Carrier not entered"} · Eff. {caseData.policy.effective_date || "not entered"} · Quote {caseData.policy.quote_number || "not entered"}</p></div><div className="case-title-actions"><Button size="sm" variant="outline" onClick={() => void renameCase()}>Rename</Button><Button size="sm" variant="outline" onClick={() => void archiveCase()}><Archive /> Archive</Button><Button size="sm" variant="outline" className="delete-case" onClick={() => void deleteCase()}><Trash2 /> Delete</Button><Button size="sm" variant="outline" onClick={() => void (status === "keyed" ? markIncomplete() : markComplete())}>{completionActionLabel(status)}</Button><StartKeyIn data={caseData} assessment={claims} alerts={activeAlerts} onStart={beginValidation} /><div className="case-score"><span>{alerts.filter((item) => item.resolved).length}</span><small>resolved</small></div></div></div>
+          <div className="case-title"><div><p className="eyebrow">{caseData.case_id} · {titleCase(caseData.case_type)}</p><h1>{caseData.insured.name || "Unnamed client"}</h1><p>{caseData.policy.company || "Carrier not entered"} · Eff. {caseData.policy.effective_date || "not entered"} · Quote {caseData.policy.quote_number || "not entered"}</p></div><div className="case-title-actions"><Button size="sm" variant="outline" onClick={() => void renameCase()}>Rename</Button><Button size="sm" variant="outline" onClick={() => void archiveCase()}><Archive /> Archive</Button><Button size="sm" variant="outline" className="delete-case" onClick={() => void deleteCase()}><Trash2 /> Delete</Button>{!isPolicyChange(caseData) && <div className="signed-verify"><label><input type="checkbox" checked={Boolean(caseData.signed)} onChange={(event) => toggleSignedVerified(event.target.checked)} /> Signed application verified</label>{!caseData.signed && signedAppDocs.length > 0 && <Select value={signedDocChoice && signedAppDocs.some((doc) => doc.id === signedDocChoice) ? signedDocChoice : signedAppDocs[0].id} onValueChange={setSignedDocChoice}><SelectTrigger size="sm" aria-label="Signed application document"><SelectValue /></SelectTrigger><SelectContent>{signedAppDocs.map((doc) => <SelectItem key={doc.id} value={doc.id}>{doc.name}</SelectItem>)}</SelectContent></Select>}<small>Confirm only after you have verified the signed application document.</small></div>}<Button size="sm" variant="outline" onClick={() => void (status === "keyed" ? markIncomplete() : markComplete())}>{completionActionLabel(status)}</Button><StartKeyIn data={caseData} assessment={claims} alerts={activeAlerts} onStart={beginValidation} /><div className="case-score"><span>{alerts.filter((item) => item.resolved).length}</span><small>resolved</small></div></div></div>
           <Tabs value={activeTab} onValueChange={setActiveTab} className="case-tabs"><TabsList variant="line" className="tab-strip">{tabs.map((tab) => <TabsTrigger key={tab} value={tab}>{tab === "prior" ? "Prior Insurance" : titleCase(tab)}</TabsTrigger>)}</TabsList><div className="tab-body"><TabsContent value="overview"><Overview data={caseData} isHab={isHab} /></TabsContent><TabsContent value="driver"><DriverView data={caseData} proposals={proposedDrivers(ingestedDocuments, caseData.drivers)} onConfirm={confirmProposedDriver} /></TabsContent><TabsContent value="vehicle"><VehicleView data={caseData} /></TabsContent><TabsContent value="prior"><PriorView data={caseData} /></TabsContent><TabsContent value="claims"><ClaimsView assessment={claims} /></TabsContent><TabsContent value="coverage"><CoverageView data={caseData} /></TabsContent><TabsContent value="property"><PropertyView data={caseData} /></TabsContent>{isPolicyChange(caseData) && <TabsContent value="change"><PolicyChangeView key={caseData.case_id} data={caseData} onChange={updatePolicyChange} /></TabsContent>}<TabsContent value="payment"><PaymentView data={caseData} /></TabsContent></div></Tabs>
           {isPolicyChange(caseData) && <NameChangeSection data={caseData} onChange={updatePolicyChange} />}
         </section>
