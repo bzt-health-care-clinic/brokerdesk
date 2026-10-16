@@ -84,6 +84,7 @@ export default function Home() {
   const centerPanelRef = useRef<HTMLElement>(null);
   const [documentsPanelWidth, setDocumentsPanelWidth] = useState(DOCUMENT_PANEL_DEFAULT);
   const [signedDocChoice, setSignedDocChoice] = useState<string | undefined>(undefined);
+  const [manualEvidenceField, setManualEvidenceField] = useState("");
 
   useEffect(() => { setDocumentsPanelWidth(clampDocumentPanelWidth(Number(window.localStorage.getItem("brokerdesk.documentsPanelWidth")) || DOCUMENT_PANEL_DEFAULT)); }, []);
   useEffect(() => { setSignedDocChoice(undefined); }, [selectedCaseId]);
@@ -104,6 +105,9 @@ export default function Home() {
   const alerts = useMemo(() => validationHasStarted(caseData) ? [...runRules(caseData, DEFAULT_RULE_CONFIG, claims), ...runPhase3Rules(caseData)] : [], [caseData, claims]);
   const baseStatus = deriveStatus(caseData, alerts);
   const status = caseData.status === "keyed" || caseData.status === "incomplete" ? caseData.status : !validationStarted ? "new" : caseData.group_discount?.selected && groupReview.validation.status !== "VALIDATED" ? (groupReview.validation.status === "MISSING_DOCUMENTS" ? "missing_documents" : "needs_confirmation") : baseStatus;
+  const manualDecisionCandidates = caseData.field_sources.filter((entry) => entry.values.length > 0);
+  const activeManualEvidenceField = manualDecisionCandidates.some((entry) => entry.field === manualEvidenceField)
+    ? manualEvidenceField : manualDecisionCandidates[0]?.field ?? "";
   const activeAlerts = alerts.filter((item) => !item.resolved);
   const critical = activeAlerts.filter((item) => item.severity === "high");
   const confirm = activeAlerts.filter((item) => item.severity !== "high");
@@ -542,6 +546,16 @@ export default function Home() {
         <aside className="review-panel panel">
           <div className="panel-heading"><div><p className="eyebrow">Rule engine</p><h1>QA review</h1></div><div className="alert-total" aria-label={`${activeAlerts.length} active review items`}>{activeAlerts.length}</div></div>
           {!validationStarted ? <div className="validation-not-started"><ShieldCheck /><strong>Validation not started</strong><p>Upload documents or start key-in to begin validation.</p></div> : <><ReviewGroup title="Critical issues" count={critical.length} tone="critical">{critical.length ? critical.map((item, index) => <AlertCard key={`${item.id}-${index}`} alert={item} data={caseData} onResolve={resolveAlert} onOverride={overrideAlert} />) : <EmptyReview label="No critical issues" />}</ReviewGroup><ReviewGroup title="Missing / confirm" count={confirm.length} tone="confirm">{confirm.length ? confirm.map((item, index) => <AlertCard key={`${item.id}-${index}`} alert={item} data={caseData} onResolve={resolveAlert} onOverride={overrideAlert} />) : <EmptyReview label="Nothing awaiting confirmation" />}</ReviewGroup></>}
+          {validationStarted && manualDecisionCandidates.length > 0 && <div className="manual-evidence-decision">
+            <strong>Broker-confirmed evidence decision</strong>
+            <p>Review the original sources, select a field and enter the confirmed value. The decision is retained for evidence review after source withdrawal.</p>
+            <label>Evidence field to confirm
+              <select value={activeManualEvidenceField} onChange={(event) => setManualEvidenceField(event.target.value)}>
+                {manualDecisionCandidates.map((field) => <option key={field.field} value={field.field}>{titleCase(field.field)} ({field.values.length} source{field.values.length === 1 ? "" : "s"})</option>)}
+              </select>
+            </label>
+            <Button size="sm" variant="outline" onClick={() => resolveAlert(activeManualEvidenceField)}>Enter correct value</Button>
+          </div>}
           <div className="notes-card"><div className="notes-heading"><div><p className="eyebrow">Broker-ready</p><h2>Notes generator</h2></div><Select value={noteType} onValueChange={(value) => { setCaseNotes((current) => ({ ...current, [noteType]: note })); setNoteType(value); setNote(caseNotes[value] ?? ""); }}><SelectTrigger size="sm"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="portal">Portal note</SelectItem><SelectItem value="uw">UW note</SelectItem><SelectItem value="audit">Audit reply</SelectItem><SelectItem value="policy">Policy change</SelectItem></SelectContent></Select></div>{noteType === "portal" && <label className="limit-control">Character limit <input type="number" min="80" max="1000" value={noteLimit} onChange={(event) => setNoteLimit(Number(event.target.value))} /></label>}<Textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Generate a concise note from this case." /><div className={`character-count ${note.length > noteLimit && noteType === "portal" ? "over" : ""}`}>Characters: {note.length} / {noteType === "portal" ? noteLimit : "—"}</div><div className="note-actions"><Button variant="outline" onClick={generateNote}>Generate</Button><Button onClick={copyNote} disabled={!note}><Clipboard /> {copied ? "Copied" : "Copy"}</Button></div></div>
         </aside>
       </div>

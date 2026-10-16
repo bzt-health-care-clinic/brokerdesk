@@ -174,7 +174,7 @@ export async function runScenario(id, page, rt, result) {
   if (id === 'C') {
     const caseId = await newCase(); const count = rt.calls.length;
     const [scan] = await upload(caseId, ['02_ownership_scan.pdf']);
-    await step('Real PDF.js worker/render to external provider boundary', async () => { assert.equal(rt.calls.length-count, 1); assert(rt.calls[count].width > 600); assert.equal(scan.packagePages[0].extractionProvider, 'ocr_space'); assert.equal(scan.packagePages[0].page, 1); assert(result.workers.some(url => /pdf.*worker/i.test(url)), 'No real PDF worker observed'); await bytesKept(scan, '02_ownership_scan.pdf'); const opened = await newPageDuring(page.context(), () => card(scan).getByRole('button', { name: 'Open', exact: true }).click()); try { await opened.waitForLoadState(); assert(opened.url().includes(`/documents/${scan.id}/file`)); } finally { await opened.close(); } });
+    await step('Real PDF.js worker/render to external provider boundary', async () => { assert.equal(rt.calls.length-count, 1); assert(rt.calls[count].width > 600); assert.equal(scan.packagePages[0].extractionProvider, 'ocr_space'); assert.equal(scan.packagePages[0].page, 1); assert(result.workers.some(url => /pdf.*worker/i.test(url) || /^blob:https?:\/\//i.test(url)), 'No PDF.js worker observed (asset or Vite blob worker)'); await bytesKept(scan, '02_ownership_scan.pdf'); const opened = await newPageDuring(page.context(), () => card(scan).getByRole('button', { name: 'Open', exact: true }).click()); try { await poll(async () => opened.url().includes(`/documents/${scan.id}/file`), 'scanned PDF popup URL', 10000); } finally { await opened.close(); } });
     const mixedCount = rt.calls.length; const [mixed] = await upload(caseId, ['05_mixed_auto_package.pdf']);
     await step('Twelve real pages, only physical page 4 sent to provider', async () => { assert.equal(mixed.packagePages.length, 12); assert.deepEqual(mixed.packagePages.filter(p => p.extractionProvider === 'ocr_space').map(p => p.page), [4]); assert.equal(rt.calls.length-mixedCount, 1); assert.match(rt.calls[mixedCount].name, /-page-4.jpg$/); assert.equal(mixed.packagePages.filter(p => p.extractionProvider === 'embedded_pdf_text').length, 11); await bytesKept(mixed, '05_mixed_auto_package.pdf'); });
     await step('Mixed report sections and physical provenance', async () => { const sections = mixed.suggestedSections?.length ? mixed.suggestedSections : mixed.logicalDocuments; for (const truth of expected.mixed_package_expected_sections.filter(s => ['MVR','DASH_AUTOPLUS'].includes(s.type))) assert(sections.some(s => s.documentType === (truth.type === 'DASH_AUTOPLUS' ? 'DASH' : truth.type) && s.startPage === truth.pages[0] && s.endPage === truth.pages[1])); for (const source of mixed.parsedSources ?? []) for (const e of Object.values(source.fieldEvidence).flat()) if (e.page) assert(e.page >= 1 && e.page <= 12); }, 'extraction');
@@ -196,10 +196,15 @@ export async function runScenario(id, page, rt, result) {
     });
     await step('Manual decision survives source withdrawal with review flag', async () => {
       await page.getByRole('button', { name: /Start key-in/i }).click(); await page.keyboard.press('Escape');
-      const controls = page.locator('.alert-card').filter({ has: page.getByRole('button', { name: 'Enter correct value', exact: true }) });
-      assert(await controls.count(), 'No supported source-resolution control: manual-decision scenario cannot be verified through current UI');
       const before = await saved(caseId);
-      await prompts(() => controls.first().getByRole('button', { name: 'Enter correct value', exact: true }).click(), () => 'Synthetic retained broker decision');
+      const candidates = before.field_sources.filter(field => field.values?.length);
+      const linked = candidates.find(field => field.values.some(value => value.documentId === doc.id && value.logicalDocumentId === section.id));
+      const selected = linked ?? candidates[0];
+      assert(selected, 'No extracted field is available for broker-confirmed source resolution');
+      const controls = page.locator('.manual-evidence-decision');
+      await controls.waitFor();
+      await controls.getByRole('combobox', { name: 'Evidence field to confirm' }).selectOption(selected.field);
+      await prompts(() => controls.getByRole('button', { name: 'Enter correct value', exact: true }).click(), () => 'Synthetic retained broker decision');
       const manual = await poll(async () => (await saved(caseId)).field_sources.find(f => f.status === 'resolved' && f.resolved_value === 'Synthetic retained broker decision' && !before.field_sources.some(b => b.field === f.field && b.resolved_value === f.resolved_value)), 'manual decision');
       result.manualDecision = { field: manual.field, value: manual.resolved_value, sources: manual.values };
     });
@@ -216,7 +221,7 @@ export async function runScenario(id, page, rt, result) {
       const response = await responseDuring(page, r => r.url() === `${backend}/documents/${doc.id}/rename`,
         () => prompts(() => card(doc).getByRole('button', { name: 'Rename', exact: true }).click(), () => 'Synthetic combined reviewed.pdf')); assert(response.ok());
       result.restart = await rt.restart(); await page.reload(); doc = (await docs(caseId)).find(d => d.id === doc.id); assert.equal(doc.originalFileName, '05_mixed_auto_package.pdf'); assert.equal(doc.currentFileName, 'Synthetic combined reviewed.pdf'); assert.deepEqual(doc.logicalDocuments.map(s => s.id), siblings); await bytesKept(doc, '05_mixed_auto_package.pdf'); await card(doc).waitFor();
-      const opened = await newPageDuring(page.context(), () => card(doc).getByRole('button', { name: 'Open', exact: true }).click()); try { await opened.waitForLoadState(); assert(opened.url().includes(`/documents/${doc.id}/file`)); } finally { await opened.close(); }
+      const opened = await newPageDuring(page.context(), () => card(doc).getByRole('button', { name: 'Open', exact: true }).click()); try { await poll(async () => opened.url().includes(`/documents/${doc.id}/file`), 'renamed PDF popup URL', 10000); } finally { await opened.close(); }
     });
   }
   if (id === 'E') {
