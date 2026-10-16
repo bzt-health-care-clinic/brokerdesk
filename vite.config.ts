@@ -58,7 +58,12 @@ export default defineConfig(async () => {
   return {
     server: {
       ...(managedLinux ? { host: "0.0.0.0", allowedHosts: ["terminal.local"] } : {}),
-      ...(isCodexSeatbeltSandbox ? { watch: { useFsEvents: false, usePolling: true } } : {}),
+      // Acceptance reports and traces are written during browser tests. Watching
+      // them would cause dev HMR to reload the app mid-scenario (notably C).
+      watch: {
+        ignored: ["**/tests/.acceptance-runs/**", "**/tests/.acceptance-20261015/**"],
+        ...(isCodexSeatbeltSandbox ? { useFsEvents: false, usePolling: true } : {}),
+      },
     },
     plugins: [
       vinext(),
