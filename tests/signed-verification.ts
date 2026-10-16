@@ -73,8 +73,8 @@ try {
   assert.equal(verified.signed_evidence_end_page, 4);
 
   // 2. DB round-trip: save first, then audit (the order page.tsx uses)
-  repositories.upsertCase({ case: verified }, "UPDATE_CASE");
-  repositories.recordAction("SIGNED_VERIFIED", verified.case_id, "FILE-1", { documentId: "FILE-1", logicalDocumentId: "SEC-1", verifiedAt: TS });
+  repositories.upsertCase({ case: verified }, "UPDATE_CASE", { trustedSignature: true });
+  repositories.recordAction("SIGNED_VERIFIED", verified.case_id, null, { documentId: "FILE-1", logicalDocumentId: "SEC-1", verifiedAt: TS });
   const persisted = repositories.getCase(verified.case_id);
   assert.equal(persisted.signed, true);
   assert.equal(persisted.signed_document_id, "FILE-1");
@@ -114,7 +114,7 @@ try {
 
   // 6. withdrawal audit is recorded with the status change
   repositories.upsertCase({ case: withdrawn.next }, "UPDATE_CASE");
-  repositories.recordAction("SIGNED_EVIDENCE_WITHDRAWN", withdrawn.next.case_id, "FILE-9", { documentId: "FILE-9", statusChanged: withdrawn.statusChanged });
+  repositories.recordAction("SIGNED_EVIDENCE_WITHDRAWN", withdrawn.next.case_id, null, { documentId: "FILE-9", statusChanged: withdrawn.statusChanged });
   assert.ok(auditActions(withdrawn.next.case_id).includes("SIGNED_EVIDENCE_WITHDRAWN"));
 
   // 7. section re-classified after verify -> invalid (fingerprint mismatch)

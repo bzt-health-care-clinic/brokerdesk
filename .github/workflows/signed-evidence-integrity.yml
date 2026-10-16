@@ -1,0 +1,48 @@
+name: BrokerDesk signed evidence integrity
+on:
+  push:
+    branches:
+      - "review/signed-evidence-integrity-*"
+  pull_request:
+    branches:
+      - main
+permissions:
+  contents: read
+jobs:
+  integrity:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse private customer files
+        run: |
+          foreach ($file in @('.env', '.env.local', 'brokerdesk.db')) {
+            if (Test-Path -LiteralPath $file) { throw "Unexpected private file in checkout" }
+          }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked development dependencies
+        run: npm ci --include=dev --include=optional --no-audit --no-fund
+      - name: TypeScript verification
+        run: |
+          & .\node_modules\.bin\tsc.cmd --noEmit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Server syntax checks
+        run: |
+          node --check local-server/server.mjs
+          node --check local-server/repositories.mjs
+          node --check tests/signed-server-integrity.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Signed state and persistence regressions
+        run: |
+          node --experimental-strip-types tests/signed-verification.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-strip-types tests/case-completion.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/signed-server-integrity.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

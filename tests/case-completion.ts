@@ -24,7 +24,7 @@ try {
   repositories.saveNote(original.case_id, "portal", "Preserved note");
 
   const keyed = markCaseComplete(original);
-  repositories.upsertCase({ case: keyed });
+  repositories.upsertCase({ case: keyed }, "UPDATE_CASE", { trustedSignature: true });
   repositories.recordAction("MARK_COMPLETE", original.case_id, null, { previousStatus: original.status, newStatus: keyed.status });
   assert.equal(repositories.getCase(original.case_id).status, "keyed");
   assert.equal(completionActionLabel("keyed"), "Mark incomplete");
@@ -41,7 +41,7 @@ try {
   assert.equal(repositories.getNotes(original.case_id).portal, "Preserved note");
 
   const keyedAgain = markCaseComplete(reopened);
-  repositories.upsertCase({ case: keyedAgain });
+  repositories.upsertCase({ case: keyedAgain }, "UPDATE_CASE", { trustedSignature: true });
   repositories.recordAction("MARK_COMPLETE", original.case_id, null, { previousStatus: reopened.status, newStatus: keyedAgain.status });
   assert.equal(repositories.getCase(original.case_id).status, "keyed");
   assert.deepEqual(db.prepare("SELECT action FROM audit_events WHERE case_id=? AND action IN ('MARK_COMPLETE','MARK_INCOMPLETE') ORDER BY id").all(original.case_id).map((row) => String(row.action)), ["MARK_COMPLETE", "MARK_INCOMPLETE", "MARK_COMPLETE"]);

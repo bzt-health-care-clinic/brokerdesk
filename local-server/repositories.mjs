@@ -6,6 +6,17 @@ import { audit } from "./database.mjs";
 import { inside, safeId, safeRelativePath } from "./paths.mjs";
 
 const now = () => new Date().toISOString();
+const signatureKeys = [
+  "signed", "signed_verified_at", "signed_document_id", "signed_logical_document_id",
+  "signed_evidence_document_type", "signed_evidence_start_page", "signed_evidence_end_page",
+];
+const clearSignature = (item) => {
+  const next = { ...item, signed: false };
+  for (const key of signatureKeys) if (key !== "signed") delete next[key];
+  if ((next.case_type === "new_auto" || next.case_type === "new_home") && next.status === "keyed") next.status = "incomplete";
+  return next;
+};
+const signatureError = (message, status = 409) => Object.assign(new Error(message), { status });
 const json = (value) => JSON.stringify(value);
 const parse = (value) => JSON.parse(value);
 const cleanName = (value) => basename(value || "document").replace(/[^A-Za-z0-9._-]/g, "_").slice(-120);
@@ -39,8 +50,28 @@ export class LocalRepositories {
       .all(archived ? 1 : 0, search.trim(), needle, needle, needle, needle, needle).map((row) => this.caseSummary(row));
   }
   getCase(id) { const row = this.db.prepare("SELECT * FROM cases WHERE id=? AND deleted_at IS NULL").get(safeId(id)); return row ? { ...parse(row.case_json), label: row.label, status: row.status } : null; }
-  upsertCase(data, action = "UPDATE_CASE") {
-    const item = data.case; const id = safeId(item.case_id); const stamp = now(); const vehicle = item.vehicles?.[0];
+  upsertCase(data, action = "UPDATE_CASE", { trustedSignature = false } = {}) {
+    let item = { ...data.case }; const id = safeId(item.case_id); const stamp = now(); const vehicle = item.vehicles?.[0];
+    // Signed confirmation is server-owned. Ordinary PUT/autosave/JSON imports
+    // cannot set or replace a verified signature reference.
+    if (!trustedSignature) {
+      const stored = this.getCase(id);
+      if (stored) {
+        for (const key of signatureKeys) {
+          if (stored[key] === undefined) delete item[key];
+          else item[key] = stored[key];
+        }
+        if (item.signed && !this.signedEvidenceStillValid(item)) {
+          item = clearSignature(item);
+          audit(this.db, "SIGNED_EVIDENCE_INVALID", { caseId: id, details: { reason: "invalid-on-save" } });
+        }
+      } else {
+        item = clearSignature(item);
+      }
+      if ((item.case_type === "new_auto" || item.case_type === "new_home") && item.status === "keyed" && !item.signed) {
+        throw signatureError("Signed application verification is required before marking this case KEYED.");
+      }
+    }
     this.db.prepare(`INSERT INTO cases(id,label,insured_name,case_type,carrier,policy_number,quote_number,vin,client_code,status,case_json,archived,created_at,updated_at)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET label=excluded.label,insured_name=excluded.insured_name,case_type=excluded.case_type,carrier=excluded.carrier,policy_number=excluded.policy_number,quote_number=excluded.quote_number,vin=excluded.vin,client_code=excluded.client_code,status=excluded.status,case_json=excluded.case_json,updated_at=excluded.updated_at`)
       .run(id, item.label, item.insured?.name || "", item.case_type || "", item.policy?.company || "", item.policy?.policy_number || "", item.policy?.auto_quote_number || item.policy?.hab_quote_number || item.policy?.quote_number || "", vehicle?.vin || item.ownership?.vin || "", item.policy?.client_code || "", item.status || "new", json(item), 0, stamp, stamp);
@@ -72,6 +103,104 @@ export class LocalRepositories {
     // table has (possibly empty) instead of synthesizing rows on read.
     const logicalDocuments = this.logicalDocuments(row.id); return { ...record, currentSourceHash, originalFileName: row.original_filename, currentFileName: row.stored_filename, logicalDocuments }; }); }
   getDocument(id) { return this.db.prepare("SELECT * FROM documents WHERE id=? AND deleted_at IS NULL").get(safeId(id, "document id")); }
+
+  // Resolve an actual saved application, not a checklist id. A segmented file
+  // requires a concrete active application section. The saved source SHA-256 must
+  // match the bytes on disk, including after a restart or external modification.
+  signatureReference(caseItem, documentId, logicalDocumentId) {
+    if (!documentId) return null;
+    const expected = caseItem.case_type === "new_auto" ? "AUTO_APPLICATION" : caseItem.case_type === "new_home" ? "HAB_APPLICATION" : null;
+    if (!expected) return null;
+    const row = this.db.prepare("SELECT * FROM documents WHERE id=? AND case_id=? AND deleted_at IS NULL").get(safeId(documentId, "document id"), caseItem.case_id);
+    if (!row) return null;
+    const file = this.documentPath(row.id);
+    if (!file) return null;
+    const record = parse(row.record_json);
+    // A security-sensitive verification must hash actual bytes, not trust the mtime/size cache.
+    const actualHash = createHash("sha256").update(readFileSync(file.path)).digest("hex");
+    if (!record.sourceHash || record.staleExtraction || actualHash !== record.sourceHash) return null;
+    const sections = this.logicalDocuments(row.id);
+    if (logicalDocumentId) {
+      const section = sections.find((candidate) => candidate.id === logicalDocumentId && candidate.documentType === expected && candidate.presenceStatus === "FOUND");
+      if (!section) return null;
+      const start = section.startPage ?? 1, end = section.endPage ?? start;
+      if ((record.withdrawnSectionRanges ?? []).some(range => start <= range.endPage && end >= range.startPage)) return null;
+      return { documentId: row.id, logicalDocumentId, documentType: expected, startPage: section.startPage, endPage: section.endPage };
+    }
+    if (sections.length || record.documentType !== expected || (record.withdrawnSectionRanges ?? []).length) return null;
+    return { documentId: row.id, documentType: expected };
+  }
+  signedEvidenceStillValid(item) {
+    if (!item?.signed) return true;
+    if (!item.signed_document_id || !item.signed_verified_at) return false;
+    const ref = this.signatureReference(item, item.signed_document_id, item.signed_logical_document_id);
+    if (!ref) return false;
+    if (item.signed_evidence_document_type && item.signed_evidence_document_type !== ref.documentType) return false;
+    if (item.signed_logical_document_id && (
+      item.signed_evidence_start_page !== undefined && item.signed_evidence_start_page !== ref.startPage ||
+      item.signed_evidence_end_page !== undefined && item.signed_evidence_end_page !== ref.endPage
+    )) return false;
+    return true;
+  }
+  // Must be called inside the caller's transaction, AFTER modifying a document.
+  // Prevents direct API calls, section edits and file replacement from leaving a
+  // completed case with a signature that no longer has valid source evidence.
+  revokeInvalidSignature(caseId, reason) {
+    const item = this.getCase(caseId);
+    if (!item?.signed || this.signedEvidenceStillValid(item)) return false;
+    const cleared = clearSignature(item);
+    this.upsertCase({ case: cleared }, "UPDATE_CASE", { trustedSignature: true });
+    audit(this.db, "SIGNED_EVIDENCE_WITHDRAWN", { caseId, documentId: item.signed_document_id ?? null,
+      details: { reason, logicalDocumentId: item.signed_logical_document_id ?? null,
+        statusChanged: item.status === "keyed" ? "keyed->incomplete" : null } });
+    return true;
+  }
+  // An atomic, audited signature transition. No other route can edit signed
+  // fields, and the server checks the selected physical file and section itself.
+  saveSignedCase(caseId, submitted, action, details = {}) {
+    caseId = safeId(caseId);
+    if (!["SIGNED_VERIFIED", "SIGNED_UNVERIFIED", "SIGNED_EVIDENCE_WITHDRAWN", "SIGNED_EVIDENCE_INVALID"].includes(action)) {
+      throw signatureError("Unsupported signature action.", 400);
+    }
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.getCase(caseId);
+      if (!existing) throw signatureError("Case not found.", 404);
+      if (submitted?.case_id !== caseId || !["new_auto", "new_home"].includes(existing.case_type) || submitted.case_type !== existing.case_type) {
+        throw signatureError("Signature transition is not valid for this case.", 400);
+      }
+      // A stale browser request must never move completion status or rewrite case identity.
+      // Physical document edits already auto-revoke signed state inside their own transaction;
+      // a subsequent browser notification is intentionally idempotent.
+      if ((action === "SIGNED_EVIDENCE_WITHDRAWN" || action === "SIGNED_EVIDENCE_INVALID") && !existing.signed) {
+        this.db.exec("COMMIT");
+        return existing;
+      }
+      if ((action === "SIGNED_EVIDENCE_WITHDRAWN" || action === "SIGNED_EVIDENCE_INVALID") && this.signedEvidenceStillValid(existing)) {
+        throw signatureError("The signed evidence is still valid; use manual unverify to revoke.");
+      }
+      let next = { ...submitted, case_id: existing.case_id, case_type: existing.case_type, status: existing.status };
+      if (action === "SIGNED_VERIFIED") {
+        const ref = this.signatureReference(existing, submitted.signed_document_id, submitted.signed_logical_document_id);
+        if (!ref) throw signatureError("Signed application evidence is missing, changed, or not a current application section.");
+        next = { ...next, signed: true, signed_verified_at: now(), signed_document_id: ref.documentId,
+          signed_logical_document_id: ref.logicalDocumentId, signed_evidence_document_type: ref.documentType,
+          signed_evidence_start_page: ref.startPage, signed_evidence_end_page: ref.endPage };
+        details = { ...details, documentId: ref.documentId, logicalDocumentId: ref.logicalDocumentId ?? null, verifiedAt: next.signed_verified_at };
+      } else {
+        next = clearSignature(next);
+        details = { ...details, documentId: existing.signed_document_id ?? null, logicalDocumentId: existing.signed_logical_document_id ?? null,
+          statusChanged: existing.status === "keyed" ? "keyed->incomplete" : null };
+      }
+      this.upsertCase({ case: next }, "UPDATE_CASE", { trustedSignature: true });
+      audit(this.db, action, { caseId, documentId: next.signed_document_id ?? existing.signed_document_id ?? null, details });
+      this.db.exec("COMMIT");
+      return this.getCase(caseId);
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   saveDocument(caseId, record, bytes, originalFilename, action = "UPLOAD_DOCUMENT", replacedDocumentId = null) {
     record = { ...record, sourceHash: createHash("sha256").update(bytes).digest("hex") };
     caseId = safeId(caseId); const id = safeId(record.id, "document id"); const extension = extname(originalFilename).toLowerCase().replace(/[^.a-z0-9]/g, "").slice(0, 12);
@@ -90,7 +219,10 @@ export class LocalRepositories {
     try {
       this.db.prepare(`INSERT INTO documents(id,case_id,original_filename,stored_filename,relative_path,mime_type,size,document_type,parse_status,validation_status,record_json,uploaded_at,updated_at,replaced_by)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)`).run(id, caseId, originalFilename, storedFilename, relativePath, record.mimeType || "application/octet-stream", bytes.length, record.documentType, record.state, record.validation?.validationStatus || "NOT_EVALUATED", json(record), stamp, stamp);
-      if (replacedDocumentId) this.db.prepare("UPDATE documents SET replaced_by=?,deleted_at=?,updated_at=? WHERE id=? AND case_id=?").run(id, stamp, stamp, safeId(replacedDocumentId), caseId);
+      if (replacedDocumentId) {
+        this.db.prepare("UPDATE documents SET replaced_by=?,deleted_at=?,updated_at=? WHERE id=? AND case_id=?").run(id, stamp, stamp, safeId(replacedDocumentId), caseId);
+        this.revokeInvalidSignature(caseId, "file-replaced");
+      }
       this.syncLogicalDocuments(caseId, id, record, "AUTOMATIC");
       audit(this.db, action, { caseId, documentId: id, details: replacedDocumentId ? { replacedDocumentId } : {} });
       this.db.exec("COMMIT");
@@ -101,7 +233,23 @@ export class LocalRepositories {
     }
     return { ...record, originalFileName: originalFilename, currentFileName: storedFilename, logicalDocuments: this.logicalDocuments(id) };
   }
-  updateDocument(id, record) { const existing = this.getDocument(id); if (!existing) return null; const logicalDocuments = this.syncLogicalDocuments(existing.case_id, id, record, "MANUAL"); const stored = { ...record, logicalDocuments }; this.db.prepare("UPDATE documents SET document_type=?,parse_status=?,validation_status=?,record_json=?,updated_at=? WHERE id=?").run(record.documentType, record.state, record.validation?.validationStatus || "NOT_EVALUATED", json(stored), now(), id); audit(this.db, "UPDATE_DOCUMENT_SECTIONS", { caseId: existing.case_id, documentId: id }); return stored; }
+  updateDocument(id, record) {
+    const existing = this.getDocument(id); if (!existing) return null;
+    if (record.id && record.id !== id) throw signatureError("Document id does not match.", 400);
+    const baseline = parse(existing.record_json);
+    const stored = { ...record, id, sourceHash: baseline.sourceHash, logicalDocuments: record.logicalDocuments };
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const logicalDocuments = this.syncLogicalDocuments(existing.case_id, id, stored, "MANUAL");
+      const complete = { ...stored, logicalDocuments };
+      this.db.prepare("UPDATE documents SET document_type=?,parse_status=?,validation_status=?,record_json=?,updated_at=? WHERE id=?")
+        .run(complete.documentType, complete.state, complete.validation?.validationStatus || "NOT_EVALUATED", json(complete), now(), id);
+      audit(this.db, "UPDATE_DOCUMENT_SECTIONS", { caseId: existing.case_id, documentId: id });
+      this.revokeInvalidSignature(existing.case_id, "section-or-document-changed");
+      this.db.exec("COMMIT");
+      return complete;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
   renameDocument(id, requestedFilename) {
     const row = this.getDocument(id); if (!row) return null; const current = resolve(this.paths.base, safeRelativePath(row.relative_path)); if (!inside(this.paths.documents, current) || !existsSync(current)) throw new Error("Saved document is unavailable");
     const extension = extname(row.stored_filename) || extname(row.original_filename); let base = safeDisplayName(requestedFilename); const requestedExtension = extname(base); if (requestedExtension) base = base.slice(0, -requestedExtension.length); base = base.replace(/[. ]+$/g, "") || "Document";
@@ -112,7 +260,19 @@ export class LocalRepositories {
     this.db.prepare("UPDATE documents SET stored_filename=?,relative_path=?,record_json=?,updated_at=? WHERE id=?").run(filename, relativePath, json(record), now(), id);
     audit(this.db, "DOCUMENT_RENAMED", { caseId: row.case_id, documentId: id, details: { oldFilename: row.stored_filename, newFilename: filename } }); return { ...record, logicalDocuments: this.logicalDocuments(id) };
   }
-  deleteDocument(id) { const row = this.getDocument(id); if (!row) return; const path = resolve(this.paths.base, safeRelativePath(row.relative_path)); if (!inside(this.paths.documents, path)) throw new Error("Unsafe saved document path"); if (existsSync(path)) rmSync(path, { force: true }); this.db.prepare("DELETE FROM documents WHERE id=?").run(id); audit(this.db, "DELETE_DOCUMENT", { caseId: row.case_id, documentId: id, details: { originalFilename: row.original_filename } }); }
+  deleteDocument(id) {
+    const row = this.getDocument(id); if (!row) return;
+    const path = resolve(this.paths.base, safeRelativePath(row.relative_path));
+    if (!inside(this.paths.documents, path)) throw new Error("Unsafe saved document path");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("DELETE FROM documents WHERE id=?").run(id);
+      audit(this.db, "DELETE_DOCUMENT", { caseId: row.case_id, documentId: id, details: { originalFilename: row.original_filename } });
+      this.revokeInvalidSignature(row.case_id, "file-deleted");
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    if (existsSync(path)) rmSync(path, { force: true });
+  }
   documentPath(id) { const row = this.getDocument(id); if (!row) return null; const path = resolve(this.paths.base, safeRelativePath(row.relative_path)); return inside(this.paths.documents, path) && existsSync(path) ? { path, row } : null; }
 
   saveNote(caseId, type, text) { const existing = this.db.prepare("SELECT id FROM notes WHERE case_id=? AND note_type=?").get(caseId, type); const stamp = now(); if (existing) this.db.prepare("UPDATE notes SET text=?,updated_at=? WHERE id=?").run(text, stamp, existing.id); else this.db.prepare("INSERT INTO notes(id,case_id,note_type,text,created_at,updated_at) VALUES(?,?,?,?,?,?)").run(randomUUID(), caseId, type, text, stamp, stamp); audit(this.db, "SAVE_NOTE", { caseId }); }

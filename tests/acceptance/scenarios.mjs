@@ -3,7 +3,7 @@ import { readFile, access } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { api, backend, frontend, expected, fixture, sha, poll } from './runtime.mjs';
-import { acceptedSuggestionsPersisted, newPageDuring, responseDuring, selectedCaseMatches } from './harness-state.mjs';
+import { acceptedSuggestionsPersisted, responseDuring, selectedCaseMatches } from './harness-state.mjs';
 
 export const names = {
   A: 'Case lifecycle and persistence', B: 'Searchable PDF, two drivers, report boundaries',
@@ -52,6 +52,20 @@ export async function runScenario(id, page, rt, result) {
     await poll(async () => { const list = (await docs(caseId)).filter(d => !before.includes(d.id)); return list.length === files.length && list.every(d => !d.packageProgress || ['COMPLETE','PARTIAL'].includes(d.packageProgress.status)) && list; }, 'upload and real package processing', 90000);
     await page.locator('.upload-zone').getAttribute('aria-busy').then(async busy => { if (busy === 'true') await page.locator('.upload-zone[aria-busy="false"]').waitFor({ timeout: 90000 }); });
     return (await docs(caseId)).filter(d => !before.includes(d.id));
+  }
+  async function downloadedSourceMatches(doc, original, expectedFilename) {
+    // Headless Chromium downloads inline PDFs rather than navigating a popup.
+    // A browser download is still an actual UI-triggered GET: verify its URL,
+    // saved bytes and, for renamed evidence, the user-visible filename.
+    const waiting = page.waitForEvent('download');
+    await card(doc).getByRole('button', { name: 'Open', exact: true }).click();
+    const download = await waiting;
+    assert.equal(new URL(download.url()).pathname, `/documents/${doc.id}/file`);
+    assert.match(download.suggestedFilename(), /\.pdf$/i);
+    if (expectedFilename) assert.equal(download.suggestedFilename(), expectedFilename);
+    const downloadedPath = await download.path();
+    assert(downloadedPath, 'Browser did not retain its downloaded PDF');
+    assert.equal(sha(await readFile(downloadedPath)), sha(await readFile(fixture(original))), 'UI-opened PDF bytes changed');
   }
   async function bytesKept(doc, original) {
     const db = new DatabaseSync(resolve(rt.data, 'brokerdesk.db'), { readOnly: true });
@@ -174,7 +188,7 @@ export async function runScenario(id, page, rt, result) {
   if (id === 'C') {
     const caseId = await newCase(); const count = rt.calls.length;
     const [scan] = await upload(caseId, ['02_ownership_scan.pdf']);
-    await step('Real PDF.js worker/render to external provider boundary', async () => { assert.equal(rt.calls.length-count, 1); assert(rt.calls[count].width > 600); assert.equal(scan.packagePages[0].extractionProvider, 'ocr_space'); assert.equal(scan.packagePages[0].page, 1); assert(result.workers.some(url => /pdf.*worker/i.test(url)), 'No real PDF worker observed'); await bytesKept(scan, '02_ownership_scan.pdf'); const opened = await newPageDuring(page.context(), () => card(scan).getByRole('button', { name: 'Open', exact: true }).click()); try { await opened.waitForLoadState(); assert(opened.url().includes(`/documents/${scan.id}/file`)); } finally { await opened.close(); } });
+    await step('Real PDF.js worker/render to external provider boundary', async () => { assert.equal(rt.calls.length-count, 1); assert(rt.calls[count].width > 600); assert.equal(scan.packagePages[0].extractionProvider, 'ocr_space'); assert.equal(scan.packagePages[0].page, 1); assert(result.workers.some(url => /pdf.*worker/i.test(url) || /^blob:https?:\/\//i.test(url)), 'No PDF.js worker observed (asset or Vite blob worker)'); await bytesKept(scan, '02_ownership_scan.pdf'); await downloadedSourceMatches(scan, '02_ownership_scan.pdf'); });
     const mixedCount = rt.calls.length; const [mixed] = await upload(caseId, ['05_mixed_auto_package.pdf']);
     await step('Twelve real pages, only physical page 4 sent to provider', async () => { assert.equal(mixed.packagePages.length, 12); assert.deepEqual(mixed.packagePages.filter(p => p.extractionProvider === 'ocr_space').map(p => p.page), [4]); assert.equal(rt.calls.length-mixedCount, 1); assert.match(rt.calls[mixedCount].name, /-page-4.jpg$/); assert.equal(mixed.packagePages.filter(p => p.extractionProvider === 'embedded_pdf_text').length, 11); await bytesKept(mixed, '05_mixed_auto_package.pdf'); });
     await step('Mixed report sections and physical provenance', async () => { const sections = mixed.suggestedSections?.length ? mixed.suggestedSections : mixed.logicalDocuments; for (const truth of expected.mixed_package_expected_sections.filter(s => ['MVR','DASH_AUTOPLUS'].includes(s.type))) assert(sections.some(s => s.documentType === (truth.type === 'DASH_AUTOPLUS' ? 'DASH' : truth.type) && s.startPage === truth.pages[0] && s.endPage === truth.pages[1])); for (const source of mixed.parsedSources ?? []) for (const e of Object.values(source.fieldEvidence).flat()) if (e.page) assert(e.page >= 1 && e.page <= 12); }, 'extraction');
@@ -187,21 +201,27 @@ export async function runScenario(id, page, rt, result) {
     const caseId = await newCase(); const [original] = await upload(caseId, ['05_mixed_auto_package.pdf']);
     let doc = await acceptSuggestions(caseId, original); const section = doc.logicalDocuments.find(s => s.documentType === 'AUTO_QUOTE') ?? doc.logicalDocuments[0]; assert(section, 'No section to edit');
     const siblings = doc.logicalDocuments.filter(s => s.id !== section.id).map(s => s.id);
+    await step('Manual decision survives source withdrawal with review flag', async () => {
+      await page.getByRole('button', { name: /Start key-in/i }).click(); await page.keyboard.press('Escape');
+      const before = await poll(async () => {
+        const current = await saved(caseId);
+        return current.field_sources?.some(field => field.values?.some(value => value.documentId === doc.id && value.logicalDocumentId === section.id)) ? current : false;
+      }, 'accepted section source reconciled into case', 45000);
+      const selected = before.field_sources.find(field => field.values.some(value => value.documentId === doc.id && value.logicalDocumentId === section.id));
+      assert(selected, 'No active source from the section being withdrawn');
+      const controls = page.locator('.manual-evidence-decision');
+      await controls.waitFor();
+      await controls.getByRole('combobox', { name: 'Evidence field to confirm' }).selectOption(selected.field);
+      await prompts(() => controls.getByRole('button', { name: 'Enter correct value', exact: true }).click(), () => 'Synthetic retained broker decision');
+      const manual = await poll(async () => (await saved(caseId)).field_sources.find(f => f.status === 'resolved' && f.resolved_value === 'Synthetic retained broker decision' && !before.field_sources.some(b => b.field === f.field && b.resolved_value === f.resolved_value)), 'manual decision');
+      result.manualDecision = { field: manual.field, value: manual.resolved_value, sources: manual.values };
+    });
     await step('Manual section edit and local reparse retain classification/association', async () => {
       await card(doc).locator('summary').filter({ hasText: /^Manage sections$/ }).click();
       const row = card(doc).locator('.section-manager:not(.suggested-sections) article').nth(doc.logicalDocuments.findIndex(s => s.id === section.id));
       const put = await responseDuring(page, r => r.url() === `${backend}/documents/${doc.id}` && r.request().method() === 'PUT',
         () => prompts(() => row.getByRole('button', { name: 'Edit', exact: true }).click(), (m, fallback) => m.startsWith('Driver or vehicle') ? 'Synthetic manually reviewed section' : m.startsWith('Subject type') ? 'DRIVER' : m.startsWith('Associate section') ? '1' : fallback)); assert(put.ok()); doc = (await docs(caseId)).find(d => d.id === doc.id); const manual = doc.logicalDocuments.find(s => s.id === section.id); assert.equal(manual.classificationSource, 'MANUAL');
       await reparse(caseId, doc); const after = (await docs(caseId)).find(d => d.id === doc.id).logicalDocuments.find(s => s.id === section.id); assert.equal(after.documentType, manual.documentType); assert.equal(after.subjectId, manual.subjectId); assert.equal(after.subjectName, manual.subjectName);
-    });
-    await step('Manual decision survives source withdrawal with review flag', async () => {
-      await page.getByRole('button', { name: /Start key-in/i }).click(); await page.keyboard.press('Escape');
-      const controls = page.locator('.alert-card').filter({ has: page.getByRole('button', { name: 'Enter correct value', exact: true }) });
-      assert(await controls.count(), 'No supported source-resolution control: manual-decision scenario cannot be verified through current UI');
-      const before = await saved(caseId);
-      await prompts(() => controls.first().getByRole('button', { name: 'Enter correct value', exact: true }).click(), () => 'Synthetic retained broker decision');
-      const manual = await poll(async () => (await saved(caseId)).field_sources.find(f => f.status === 'resolved' && f.resolved_value === 'Synthetic retained broker decision' && !before.field_sources.some(b => b.field === f.field && b.resolved_value === f.resolved_value)), 'manual decision');
-      result.manualDecision = { field: manual.field, value: manual.resolved_value, sources: manual.values };
     });
     await step('Deleting section withdraws automatic facts; siblings/file remain', async () => {
       doc = (await docs(caseId)).find(d => d.id === doc.id);
@@ -216,7 +236,7 @@ export async function runScenario(id, page, rt, result) {
       const response = await responseDuring(page, r => r.url() === `${backend}/documents/${doc.id}/rename`,
         () => prompts(() => card(doc).getByRole('button', { name: 'Rename', exact: true }).click(), () => 'Synthetic combined reviewed.pdf')); assert(response.ok());
       result.restart = await rt.restart(); await page.reload(); doc = (await docs(caseId)).find(d => d.id === doc.id); assert.equal(doc.originalFileName, '05_mixed_auto_package.pdf'); assert.equal(doc.currentFileName, 'Synthetic combined reviewed.pdf'); assert.deepEqual(doc.logicalDocuments.map(s => s.id), siblings); await bytesKept(doc, '05_mixed_auto_package.pdf'); await card(doc).waitFor();
-      const opened = await newPageDuring(page.context(), () => card(doc).getByRole('button', { name: 'Open', exact: true }).click()); try { await opened.waitForLoadState(); assert(opened.url().includes(`/documents/${doc.id}/file`)); } finally { await opened.close(); }
+      await downloadedSourceMatches(doc, '05_mixed_auto_package.pdf', 'Synthetic combined reviewed.pdf');
     });
   }
   if (id === 'E') {
