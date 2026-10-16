@@ -195,6 +195,18 @@ try {
   assert(evaluateIntakeProfile(noAuth,[]).blockers.some(b=>b.code==="INTAKE_CHANGE_AUTHORIZATION"));
   noAuth.policy_change.transaction_types=["ADD_VEHICLE"];
   assert(evaluateIntakeProfile(noAuth,[]).blockers.some(b=>b.code==="INTAKE_CHANGE_TARGET_UNCONFIRMED"));
+
+  // A misleading attachment filename is a yellow warning, never a queue-routing instruction.
+  const mismatchEntries=readBdzip(original.archive);
+  const mismatchManifest=JSON.parse(mismatchEntries.get("manifest.json").toString("utf8"));
+  mismatchManifest.package_id="synthetic-filename-mismatch-package";
+  mismatchEntries.set("manifest.json",Buffer.from(JSON.stringify(mismatchManifest)));
+  const mismatched=pilot.importArchive(createBdzip([...mismatchEntries].map(([path,bytes])=>({path,bytes}))),
+    original.filename.replace(/-home\.bdzip$/,"-cancellation.bdzip"));
+  assert.equal(mismatched.system,"new-business");
+  assert(mismatched.preflight.warnings.some(w=>w.code==="INTAKE_FILENAME_ROUTE_MISMATCH"));
+  assert(pilot.listInbox("new-business").find(x=>x.package_id===mismatched.package_id).warnings
+    .some(w=>w.code==="INTAKE_FILENAME_ROUTE_MISMATCH"));
   console.log("Broker/Auditor pilot submission and authoritative inbox: PASS");
 } finally {
   db.close();rmSync(root,{recursive:true,force:true});
