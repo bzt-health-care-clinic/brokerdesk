@@ -272,10 +272,12 @@ export default function Home() {
   async function markComplete() {
     if (isPolicyChange(caseData) && !policyChangeCanComplete(caseData)) { window.alert("This policy change still has a blocker or pending underwriting approval."); return; }
     if (!isPolicyChange(caseData)) {
-      // New business has no policyChangeCanComplete gate: block only on unresolved
-      // high-severity alerts and documents awaiting review. Medium EVIDENCE_REVIEW
-      // alerts must not block, or the normal review workflow would deadlock.
-      const blockers = runRules(caseData, DEFAULT_RULE_CONFIG).filter((item) => !item.resolved && item.severity === "high");
+      // New business has no policyChangeCanComplete gate: block on the same complete
+      // rule set the QA panel shows (runRules + runPhase3Rules), computed unconditionally
+      // so the gate holds even before "Start key-in" was pressed. This covers phase-3
+      // highs such as missing drivers, missing MVR received dates and CTSAC issues.
+      // Medium EVIDENCE_REVIEW alerts must not block, or the normal review workflow would deadlock.
+      const blockers = [...runRules(caseData, DEFAULT_RULE_CONFIG, claims), ...runPhase3Rules(caseData)].filter((item) => !item.resolved && item.severity === "high");
       const pendingReview = ingestedDocuments.some((record) => record.state === "NEEDS_REVIEW");
       if (blockers.length > 0 || pendingReview) { window.alert("There are unresolved high-severity issues or documents awaiting review. Resolve them before marking complete."); return; }
     }
