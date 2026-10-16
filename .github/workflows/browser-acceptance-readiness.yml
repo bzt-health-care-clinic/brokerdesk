@@ -1,6 +1,9 @@
 name: BrokerDesk synthetic A–E acceptance
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - 'review/signed-evidence-integrity-*'
   pull_request:
     branches:
       - main
