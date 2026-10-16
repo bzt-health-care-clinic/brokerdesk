@@ -35,7 +35,7 @@ Warnings are included in manifest `preflight.warnings` and *recomputed by the Au
 - MVR received date as a stand-alone intake issue (if MVR actually present). Existing engine may emit `MVR_RECEIVED_DATE_MISSING` HIGH: intake must explicitly suppress this **specific** item, not silently weaken any unrelated HIGH finding.
 - Landlord package, solid-fuel/oil-tank questionnaires, high-value appraisal, and live weather-event bind prohibition (no live data).
 
-## Current implementation and gaps (snapshot 2026-10-16)
+## Historical gap inventory (before v1.0 implementation; retained for traceability)
 - **Implemented in Draft PR #3, pending Chromium acceptance:** local Broker/Auditor modes, versioned new-business/policy-change intake profiles, package ZIP+SHA256 export/import, full document bytes, single-Auditor inbox, dual channels, second Auditor disabled, atomic claim, initial signatures and per-VIN Ownership checks.
 - **Not yet implemented**: #7 name-set comparison using application vs quote; #8 and #11 two separate signer attestations; #9 and #10 OPCF-specific supporting source/signature gates; #12 claimed-discount-to-proof mappings; both WARN rules and yellow queue display.
 - Existing v0.3 profile may emit an MVR date HIGH, contrary to this spec. Targeted regression is required.
@@ -53,3 +53,32 @@ Warnings are included in manifest `preflight.warnings` and *recomputed by the Au
 
 ## Privacy and QA
 Synthetic fixtures only in GitHub/CI. No real client files, IDs, signatures, policy numbers, void cheques, original quote PDFs, or local databases in source control or test artifacts.
+
+## Implemented v1.0 evidence workflow (Draft PR #3)
+
+The historical gaps above record the state **before** the implementation batches. The following is the implementation trace. **Do not interpret code completion or synthetic CI as real-client pilot authorization.**
+
+| Rule | Broker/Auditor implementation |
+| --- | --- |
+| #1–#6 | Per-vehicle active VIN/Ownership source, actual required evidence, existing HIGH/selection gates, and source SHA-256 recheck |
+| #7 | Broker-entered named-insured sets from signed Application and Quote, bound to the original active files/sections/hashes, compared to Case identity and count |
+| #8 and #11 | Separate manually checked policyholder-signature attestations, signer identity, exact page/section and file SHA-256; Cancellation requires active written request |
+| #9 | Only structurally selected OPCF 43 requires Bill of Sale or Lease Agreement; the evidence is linked to an explicit current vehicle |
+| #10 | Structurally selected OPCF 28A, 49, 19 and 13C each require an active, manually verified signed OPCF/Policy Change section and signer/page |
+| #12 | Broker reviews discounts actually applied (driver training, student, winter tires, anti-theft, retirement) and binds each selected claim to an active named driver/vehicle and proof. Unselected discounts need no document |
+| WARN | For explicitly selected Physical Damage on a 15+ year vehicle, flag missing linked photo/inspection. For a reliably dated, unbound quote older than 30 days (Max 60), flag age. Both remain non-blocking |
+| Routing and display | Broker .bdzip manifest contains preflight WARNs. Auditor independently recomputes all rules, stores its own warnings and displays them in yellow on the authoritative inbox. A misleading attachment filename is an advisory WARN; routing follows the verified Manifest/Case |
+
+Manual confirmation creates an audited, server-owned evidence record; it is not a declaration that OCR found a signature. Confirmation references are validated again against the saved physical bytes, current logical section, page range, declared signer/subject and source SHA-256. Ordinary Case JSON saves cannot manufacture or replace these records. When a document is deleted/replaced/reclassified, invalid references are removed and the required document blocks intake again.
+
+**Synthetic regression inventory:** TypeScript; tests/submission-pilot.mjs (export, import, original source bytes, manifest SHA-256, duplicate handling, filename/queue warning, original signature integrity); tests/intake-v1-support.mjs (unselected/selected OPCFs, wrong target, duplicate source across subjects, signed page, stale source, selected/unselected discounts and 5 proof types, date and Max boundaries, old-vehicle photo evidence, forged Case JSON); signed-server-integrity and existing document underwriting regressions; Windows A–E actual Chromium and Auditor inbox smoke.
+
+### Required separate manual pilot sign-off (not fulfilled by synthetic CI)
+
+- Confirm local backup/restore, canonical SQLite path and ability to reopen retained attachments before trial.
+- Broker 1/2: create real test Cases, classify original quote/application/endorsement/discount evidence, verify names and signers, confirm calculated warnings, generate .bdzip only with zero blockers and attach manually to email.
+- Auditor 1: download actual attached package, import, verify fresh-rule and SHA checks, correct New Business/Policy Change routing and warning visibility, duplicate handling, claim/release/complete, and manually submit to the insurer only after review.
+- Confirm rejected packages create no authoritative Case or task, and document editing invalidates the correct attestations.
+- Do not use a second Auditor or expose the loopback server to LAN without the separate authenticated HTTPS design. Formal Broker IDs and real pilot approvals remain outside this code batch.
+
+All GitHub tests remain fully synthetic and must never store customer-identifying documents, source PDFs or local SQLite databases.
