@@ -92,3 +92,5 @@ All GitHub tests remain fully synthetic and must never store customer-identifyin
 - **Existing boundaries retained by design:** discount proof checks only explicitly selected claims and does not infer discounts from retirement or tire flags alone. Quote and old-car warnings use reliably recorded quote/physical-damage facts; unknown facts do not cause guessed yellow warnings.
 
 Regression coverage: tests/intake-name-matching.mjs and tests/intake-v1-support.mjs, included in the Windows pilot submission workflow. The Draft PR is not authorization to use real client records before manual pilot sign-off.
+
+- Auto/Home Quote parsing also recognizes Co-Insured and Second Named Insured labels, allowing manual one-click suggestions for additional named policyholders where OCR captured them.

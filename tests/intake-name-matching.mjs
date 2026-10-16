@@ -11,6 +11,7 @@ import { createBlankHabCase, createBlankPolicyChangeCase } from "../lib/case-fac
 import { sameNamedPersons, insuredPersonNames } from "../lib/intake-person-evidence.ts";
 import { parsedPolicyholderSuggestions, appendSuggestedPolicyholder } from "../lib/intake-name-suggestions.ts";
 import { evaluateIntakeProfile } from "../lib/intake-profile.ts";
+import { parserFor } from "../lib/document-ingestion.ts";
 
 assert(sameNamedPersons(["DOE, JOHN"], ["JOHN DOE"]));
 assert(sameNamedPersons(["John  Doe"], ["DOE, JOHN."]));
@@ -26,6 +27,18 @@ assert(!sameNamedPersons(["!!!"], ["!!!"]));
 assert(!sameNamedPersons(["JOHN DOE"], ["JOHN DOE", "ANN LEE"]));
 assert(!sameNamedPersons(["JOHN DOE"], ["JOHN"]));
 assert(!sameNamedPersons([null], [null]));
+
+// Quote parsing must also expose the second applicant; suggestions remain manual hints.
+const autoParsed=await parserFor("AUTO_QUOTE").parse({
+  text:"Named Insured: DOE, JOHN\nCo-Insured: LEE, ANN",pages:[],confidence:.95
+});
+assert.equal(autoParsed.data.namedInsured,"DOE, JOHN");
+assert.equal(autoParsed.data.coInsured,"LEE, ANN");
+const habParsed=await parserFor("HAB_QUOTE").parse({
+  text:"Named Insured: DOE, JOHN\nSecond Named Insured: LEE, ANN",pages:[],confidence:.95
+});
+assert.equal(habParsed.data.namedInsured,"DOE, JOHN");
+assert.equal(habParsed.data.coInsured,"LEE, ANN");
 
 const section=(id,documentType)=>({id:id+"SEC",physicalFileId:id,documentType,
   title:"Synthetic source",startPage:1,endPage:1,presenceStatus:"FOUND",
