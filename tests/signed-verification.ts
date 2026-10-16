@@ -73,7 +73,7 @@ try {
   assert.equal(verified.signed_evidence_end_page, 4);
 
   // 2. DB round-trip: save first, then audit (the order page.tsx uses)
-  repositories.upsertCase({ case: verified }, "UPDATE_CASE");
+  repositories.upsertCase({ case: verified }, "UPDATE_CASE", { trustedSignature: true });
   repositories.recordAction("SIGNED_VERIFIED", verified.case_id, null, { documentId: "FILE-1", logicalDocumentId: "SEC-1", verifiedAt: TS });
   const persisted = repositories.getCase(verified.case_id);
   assert.equal(persisted.signed, true);
