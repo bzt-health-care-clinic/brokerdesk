@@ -100,8 +100,10 @@ export function evaluateIntakeProfile(
   if (system === "new-business") {
     if (!["new_auto", "new_home", "new_condo", "new_tenant"].includes(item.case_type))
       push("INTAKE_UNSUPPORTED_CASE_TYPE", "Only new business and policy changes can be submitted.", "case_type");
-    if (!item.signed || !item.signed_verified_at || !isSignedEvidenceStillValid(records, item).valid)
-      push("INTAKE_SIGNED_APPLICATION", "Signed application must be manually verified against an active source PDF.", "signed", undefined, item.signed_document_id);
+    const signedRecord = records.find(r => r.id === item.signed_document_id);
+    if (!item.signed || !item.signed_verified_at || !signedRecord || !digestPresent(signedRecord) ||
+      !isSignedEvidenceStillValid(records, item).valid)
+      push("INTAKE_SIGNED_APPLICATION", "Signed application must be manually verified against an active, unchanged source PDF.", "signed", undefined, item.signed_document_id);
     if (item.case_type === "new_auto") {
       if (!item.vehicles.length) push("INTAKE_VEHICLE_REQUIRED", "Auto new business requires at least one rated vehicle.", "vehicles");
       for (const [index, vehicle] of item.vehicles.entries())
