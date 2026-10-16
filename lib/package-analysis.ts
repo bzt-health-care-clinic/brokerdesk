@@ -115,15 +115,15 @@ export async function analyzePdfPackage(record: UploadedDocumentRecord, file: Fi
     // A G4Sign/signed-application package is one application with many pages,
     // not unrelated documents based on incidental phrases ("Leased: No",
     // "Driver Training: No", etc.). Use cover identity only when unambiguous.
-    const signedPacket = /^g4sign[\\s._-]/i.test(record.fileName) || /signed.*(?:home|hab|auto).*app/i.test(record.fileName);
+    const signedPacket = /^g4sign[\s._-]/i.test(record.fileName) || /signed.*(?:home|hab|auto).*app/i.test(record.fileName);
     if (signedPacket) {
-      const cover = pages.filter(page => page.page <= 2).map(page => page.text ?? "").join("\\n");
-      const hasHab = /\\bHABITATIONAL\\s+INSURANCE\\b/i.test(cover);
-      const hasAuto = /\\bAUTOMOBILE\\s+INSURANCE\\b/i.test(cover);
+      const cover = pages.filter(page => page.page <= 2).map(page => page.text ?? "").join("\n");
+      const hasHab = /\bHABITATIONAL\s+INSURANCE\b/i.test(cover);
+      const hasAuto = /\bAUTOMOBILE\s+INSURANCE\b/i.test(cover);
       const family = hasHab !== hasAuto ? (hasHab ? "HAB_APPLICATION" : "AUTO_APPLICATION") : undefined;
       if (family) {
         for (const page of pages) if (page.extractionStatus === "COMPLETE" &&
-          !/^\\s*(?:DASH\\s+DRIVER\\s+REPORT|MVR\\s+ABSTRACTS|ONTARIO\\s+DRIVING\\s+RECORD)\\b/im.test(page.text ?? "")) {
+          !/^\s*(?:DASH\s+DRIVER\s+REPORT|MVR\s+ABSTRACTS|ONTARIO\s+DRIVING\s+RECORD)\b/im.test(page.text ?? "")) {
           page.classification = { documentType: family, confidence: .95, reason: "Confirmed signed application package cover." };
         }
         record = { ...record, documentType: family,
