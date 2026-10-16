@@ -537,6 +537,8 @@ export interface InsuranceCase {
   premium: Premium;
   payment: Payment;
   policy_change?: PolicyChange;
+  /** Manual evidence-bound authorization; separate from new-business signed application. */
+  transaction_authorization?: import("./intake-profile.ts").ChangeAuthorization;
   field_sources: FieldSource[];
   documents: CaseDocument[];
   alerts: Alert[];
