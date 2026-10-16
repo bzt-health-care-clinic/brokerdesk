@@ -6,6 +6,7 @@ import { audit } from "./database.mjs";
 import { inside, safeId, safeRelativePath } from "./paths.mjs";
 
 const now = () => new Date().toISOString();
+const authorizationKey = "transaction_authorization";
 const signatureKeys = [
   "signed", "signed_verified_at", "signed_document_id", "signed_logical_document_id",
   "signed_evidence_document_type", "signed_evidence_start_page", "signed_evidence_end_page",
@@ -65,8 +66,17 @@ export class LocalRepositories {
           item = clearSignature(item);
           audit(this.db, "SIGNED_EVIDENCE_INVALID", { caseId: id, details: { reason: "invalid-on-save" } });
         }
+        // Authorization is server-owned: JSON import/autosave cannot fabricate it.
+        if (stored[authorizationKey] === undefined) delete item[authorizationKey];
+        else item[authorizationKey] = stored[authorizationKey];
+        if (item[authorizationKey] && !this.transactionAuthorizationStillValid(item)) {
+          delete item[authorizationKey];
+          if (item.status === "keyed") item.status = "incomplete";
+          audit(this.db, "TRANSACTION_AUTH_INVALID", { caseId: id, details: { reason: "invalid-on-save" } });
+        }
       } else {
         item = clearSignature(item);
+        delete item[authorizationKey];
       }
       if ((item.case_type === "new_auto" || item.case_type === "new_home") && item.status === "keyed" && !item.signed) {
         throw signatureError("Signed application verification is required before marking this case KEYED.");
@@ -142,11 +152,88 @@ export class LocalRepositories {
     )) return false;
     return true;
   }
+  transactionAuthorizationReference(item, documentId, logicalDocumentId) {
+    if (!["auto_policy_change", "home_policy_change"].includes(item.case_type)) return null;
+    if (!documentId) return null;
+    const row = this.getDocument(documentId);
+    if (!row || row.case_id !== item.case_id) return null;
+    const file = this.documentPath(row.id);
+    if (!file) return null;
+    const record = parse(row.record_json);
+    const fingerprint = createHash("sha256").update(readFileSync(file.path)).digest("hex");
+    if (!record.sourceHash || record.sourceHash !== fingerprint || record.staleExtraction) return null;
+    const types = item.policy_change?.transaction_types ?? [];
+    const allowed = types.includes("CANCELLATION") ? ["CANCELLATION_REQUEST"] :
+      types.includes("NAME_CHANGE") ? ["POLICY_CHANGE", "OPCF_FORM"] :
+      types.includes("PAYMENT_CHANGE") ? ["PAYMENT_AUTHORIZATION", "POLICY_CHANGE"] :
+      ["POLICY_CHANGE", "OPCF_FORM"];
+    const sections = this.logicalDocuments(row.id);
+    if (logicalDocumentId) {
+      const section = sections.find(s => s.id === logicalDocumentId && s.presenceStatus === "FOUND" && allowed.includes(s.documentType));
+      if (!section) return null;
+      if ((record.withdrawnSectionRanges ?? []).some(r =>
+        (section.startPage ?? 1) <= r.endPage && (section.endPage ?? section.startPage ?? 1) >= r.startPage)) return null;
+      return { documentId, logicalDocumentId, type: section.documentType, hash: fingerprint,
+        startPage: section.startPage, endPage: section.endPage };
+    }
+    if (sections.length && (sections.length > 1 || sections[0].presenceStatus !== "FOUND" || !allowed.includes(sections[0].documentType)))
+      return null;
+    if (!sections.length && !allowed.includes(record.documentType)) return null;
+    if (record.withdrawnSectionRanges?.length) return null;
+    return { documentId, type: sections[0]?.documentType ?? record.documentType, hash: fingerprint };
+  }
+  transactionAuthorizationStillValid(item) {
+    const auth = item.transaction_authorization;
+    if (!auth?.verified) return false;
+    const ref = this.transactionAuthorizationReference(item, auth.document_id, auth.logical_document_id);
+    return Boolean(ref && ref.hash === auth.source_sha256 && ref.type === auth.document_type &&
+      (auth.logical_document_id === undefined || (ref.startPage === auth.start_page && ref.endPage === auth.end_page)));
+  }
+  saveTransactionAuthorization(caseId, requested, actor = "Local Broker") {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const item = this.getCase(safeId(caseId)); if (!item) throw signatureError("Case not found.",404);
+      if (!["auto_policy_change","home_policy_change"].includes(item.case_type))
+        throw signatureError("Authorization is only for policy-change cases.",400);
+      let next = { ...item };
+      if (requested.verified) {
+        const ref = this.transactionAuthorizationReference(item, requested.documentId, requested.logicalDocumentId);
+        if (!ref) throw signatureError("Signed change authorization source is missing, mismatched, stale or withdrawn.");
+        const intent = item.policy_change?.transaction_types ?? [];
+        next.transaction_authorization = {
+          verified: true, authorization_type: intent.includes("CANCELLATION") ? "CANCELLATION_REQUEST" :
+            intent.includes("NAME_CHANGE") ? "NAME_CHANGE_REQUEST" : "SIGNED_CHANGE_FORM",
+          document_id: ref.documentId, logical_document_id: ref.logicalDocumentId,
+          document_type: ref.type, source_sha256: ref.hash, verified_at: now(), verified_by: actor,
+          start_page: ref.startPage, end_page: ref.endPage,
+        };
+      } else {
+        delete next.transaction_authorization;
+        if (next.status === "keyed") next.status = "incomplete";
+      }
+      this.upsertCase({case:next}, "UPDATE_CASE", {trustedSignature:true});
+      audit(this.db, requested.verified ? "TRANSACTION_AUTH_VERIFIED" : "TRANSACTION_AUTH_REVOKED", {
+        caseId, documentId: requested.documentId ?? item.transaction_authorization?.document_id ?? null,
+        details: { actor, authorizationType: next.transaction_authorization?.authorization_type ?? null } });
+      this.db.exec("COMMIT");
+      return this.getCase(caseId);
+    } catch (e) { this.db.exec("ROLLBACK"); throw e; }
+  }
   // Must be called inside the caller's transaction, AFTER modifying a document.
   // Prevents direct API calls, section edits and file replacement from leaving a
   // completed case with a signature that no longer has valid source evidence.
   revokeInvalidSignature(caseId, reason) {
     const item = this.getCase(caseId);
+    if (item?.transaction_authorization && !this.transactionAuthorizationStillValid(item)) {
+      const modified = { ...item };
+      delete modified.transaction_authorization;
+      if (modified.status === "keyed") modified.status = "incomplete";
+      this.upsertCase({ case: modified }, "UPDATE_CASE", { trustedSignature: true });
+      audit(this.db, "TRANSACTION_AUTH_WITHDRAWN", { caseId,
+        documentId: item.transaction_authorization.document_id,
+        details: {reason, logicalDocumentId: item.transaction_authorization.logical_document_id ?? null} });
+      if (!item.signed) return true;
+    }
     if (!item?.signed || this.signedEvidenceStillValid(item)) return false;
     const cleared = clearSignature(item);
     this.upsertCase({ case: cleared }, "UPDATE_CASE", { trustedSignature: true });
