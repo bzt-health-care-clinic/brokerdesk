@@ -1,4 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve, sep } from "node:path";
 
 export function openDatabase(path) {
   const db = new DatabaseSync(path);
@@ -63,4 +66,42 @@ export function openDatabase(path) {
 export function audit(db, action, { caseId = null, documentId = null, details = {} } = {}) {
   db.prepare("INSERT INTO audit_events(case_id,document_id,actor,action,details_json,created_at) VALUES(?,?,?,?,?,?)")
     .run(caseId, documentId, "Local User", action, JSON.stringify(details), new Date().toISOString());
+}
+
+// One-time, idempotent backfill for legacy document rows whose record_json has no
+// sourceHash integrity baseline. New uploads store sourceHash at write time
+// (see saveDocument), and listDocuments must not write on read, so this migration —
+// run once at server startup — is the only writer of historical baselines.
+// Rationale: an in-memory-only baseline re-baselines on every restart, so a file
+// modified while the app was closed would silently become the new "trusted" baseline.
+// A persisted baseline makes later modifications detectable (package-analysis
+// invalidates parsed data when the current hash differs from the stored baseline).
+// Rows whose file is missing are skipped; they keep the in-memory fallback on read.
+export function migrateSourceHashBaselines(db, baseDir) {
+  const documentsDir = resolve(baseDir, "documents");
+  const rows = db.prepare(
+    "SELECT id, relative_path, record_json FROM documents WHERE deleted_at IS NULL AND json_extract(record_json, '$.sourceHash') IS NULL"
+  ).all();
+  if (!rows.length) return 0;
+  let updated = 0;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const stmt = db.prepare("UPDATE documents SET record_json = ?, updated_at = ? WHERE id = ?");
+    for (const row of rows) {
+      const absolute = resolve(baseDir, row.relative_path);
+      if (absolute !== documentsDir && !absolute.startsWith(documentsDir + sep)) continue;
+      if (!existsSync(absolute)) continue;
+      let record;
+      try { record = JSON.parse(row.record_json); } catch { continue; }
+      if (record.sourceHash) continue;
+      record.sourceHash = createHash("sha256").update(readFileSync(absolute)).digest("hex");
+      stmt.run(JSON.stringify(record), new Date().toISOString(), row.id);
+      updated += 1;
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return updated;
 }

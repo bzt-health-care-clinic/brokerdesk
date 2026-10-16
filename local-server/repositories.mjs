@@ -73,7 +73,14 @@ export class LocalRepositories {
     record = { ...record, sourceHash: createHash("sha256").update(bytes).digest("hex") };
     caseId = safeId(caseId); const id = safeId(record.id, "document id"); const extension = extname(originalFilename).toLowerCase().replace(/[^.a-z0-9]/g, "").slice(0, 12);
     const folder = resolve(this.paths.documents, caseId); if (!inside(this.paths.documents, folder)) throw new Error("Unsafe document directory"); mkdirSync(folder, { recursive: true });
-    const storedFilename = `${id}-${cleanName(record.documentType).toLowerCase()}${extension}`; const absolute = resolve(folder, storedFilename); if (!inside(folder, absolute)) throw new Error("Unsafe document path");
+    // Never overwrite an existing file: the stored name embeds the document id, so a
+    // repeated upload of the same id would clobber the original bytes; the INSERT below
+    // would then fail on the duplicate id and the rollback would delete the original
+    // evidence file. Give this upload a unique name instead; the rollback below then only
+    // ever removes the file this call created.
+    let storedFilename = `${id}-${cleanName(record.documentType).toLowerCase()}${extension}`; let absolute = resolve(folder, storedFilename); let suffix = 2;
+    while (existsSync(absolute)) { storedFilename = `${id}-${cleanName(record.documentType).toLowerCase()} (${suffix})${extension}`; absolute = resolve(folder, storedFilename); suffix += 1; }
+    if (!inside(folder, absolute)) throw new Error("Unsafe document path");
     const temporary = resolve(this.paths.temp, `${randomUUID()}.upload`); writeFileSync(temporary, bytes); renameSync(temporary, absolute);
     const relativePath = relative(this.paths.base, absolute).replaceAll("\\", "/"); const stamp = now();
     this.db.exec("BEGIN IMMEDIATE");

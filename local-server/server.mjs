@@ -1,7 +1,7 @@
 import http from "node:http";
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { openDatabase } from "./database.mjs";
+import { openDatabase, migrateSourceHashBaselines } from "./database.mjs";
 import { resolveDataPaths } from "./paths.mjs";
 import { LocalRepositories } from "./repositories.mjs";
 import { ocrSpaceHealth, requestOcrSpace } from "./ocr-space.mjs";
@@ -12,6 +12,9 @@ loadLocalEnvironment();
 
 const paths = resolveDataPaths();
 const db = openDatabase(paths.database);
+// One-time backfill of sourceHash integrity baselines for legacy document rows.
+// Idempotent: only rows missing $.sourceHash are touched; afterwards it is a no-op.
+migrateSourceHashBaselines(db, paths.base);
 const repositories = new LocalRepositories(db, paths);
 repositories.cleanTemp();
 const host = "127.0.0.1";

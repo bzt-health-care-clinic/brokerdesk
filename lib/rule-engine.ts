@@ -3,6 +3,7 @@ export { partitionClaims } from "./claim-assessment.ts";
 import type {
   Alert,
   Claim,
+  Conviction,
   FieldSource,
   InsuranceCase,
   RuleConfig,
@@ -36,6 +37,7 @@ const source = (data: InsuranceCase, field: string) =>
 
 function vehicleOwnership(data: InsuranceCase, index: number) {
   const vehicle = data.vehicles[index];
+  if (!vehicle) return undefined;
   if (vehicle.ownership?.received) return vehicle.ownership;
   if (data.vehicles.length === 1 && data.ownership?.received) return data.ownership;
   if (data.ownership?.received && vehicle.vin && norm(data.ownership.vin) === norm(vehicle.vin)
@@ -107,16 +109,20 @@ export function checkCoInsured(data: InsuranceCase): Alert[] {
 }
 
 export function checkLessor(data: InsuranceCase): Alert[] {
-  if (!isAuto(data) || !data.vehicles[0]) return [];
-  // NOTE: reconciliation writes ownership facts to the vehicle's ownership record;
-  // the top-level data.ownership is only a fallback and is usually empty.
-  const ownershipLessor = vehicleOwnership(data, 0)?.lessor;
-  const applicationLessor = data.vehicles[0].lessor;
-  if (!ownershipLessor || !applicationLessor) return [];
-  const mismatched = norm(ownershipLessor.name) !== norm(applicationLessor.name) || norm(ownershipLessor.address) !== norm(applicationLessor.address);
-  return mismatched
-    ? [alert("LESSOR_MISMATCH", "medium", "Lessor address mismatch.", "lessor", source(data, "lessor"))]
-    : [];
+  if (!isAuto(data)) return [];
+  // Check every vehicle: reconciliation writes ownership facts to each vehicle's own
+  // ownership record; the top-level data.ownership is only a fallback and is usually
+  // empty. Vehicles without ownership are skipped (a missing-ownership alert is raised
+  // separately by checkOwnership).
+  return data.vehicles.flatMap((vehicle, index) => {
+    const ownershipLessor = vehicleOwnership(data, index)?.lessor;
+    const applicationLessor = vehicle.lessor;
+    if (!ownershipLessor || !applicationLessor) return [];
+    const mismatched = norm(ownershipLessor.name) !== norm(applicationLessor.name) || norm(ownershipLessor.address) !== norm(applicationLessor.address);
+    return mismatched
+      ? [alert("LESSOR_MISMATCH", "medium", `Lessor mismatch for ${vehicleLabel(data, index)}.`, `vehicles.${index}.lessor`, source(data, "lessor"))]
+      : [];
+  });
 }
 
 export function checkPriorPolicy(data: InsuranceCase): Alert[] {
@@ -145,11 +151,12 @@ export function checkMvr(data: InsuranceCase): Alert[] {
       const licenceSource = source(data, `licence_dates:${driver.name}`);
       if (licenceSource?.status === "conflict") alerts.push(alert("LICENCE_DATE_CONFLICT", "medium", `Licence date conflict for ${driver.name}. MVR Issue Date has not overwritten G/G2/G dates.`, "licence_dates", licenceSource));
     }
-    // Compare convictions as an order-insensitive set of (description, conviction_date) keys:
-    // the same convictions in a different order must not raise a mismatch.
-    const convictionKey = (conviction: { description?: unknown; conviction_date?: unknown }) =>
-      `${String(conviction.description ?? "")}|${String(conviction.conviction_date ?? "")}`;
-    const convictionKeys = (convictions: Array<{ description?: unknown; conviction_date?: unknown }> | undefined) =>
+    // Compare convictions as order-insensitive sets of complete normalized records:
+    // the same convictions in a different order must not raise a mismatch, but any
+    // field difference (offence date, severity, demerit points, speed over limit) must.
+    const convictionKey = (conviction: Conviction) =>
+      JSON.stringify([conviction.description ?? "", conviction.offence_date ?? "", conviction.conviction_date ?? "", conviction.speed_over_limit ?? "", conviction.severity ?? "", conviction.demerit_points ?? ""]);
+    const convictionKeys = (convictions: Conviction[] | undefined) =>
       JSON.stringify((convictions ?? []).map(convictionKey).sort());
     if (driver.mvr_convictions && convictionKeys(driver.convictions) !== convictionKeys(driver.mvr_convictions)) {
       alerts.push(alert("MVR_CONVICTION_MISMATCH", "high", `Conviction information differs from MVR for ${driver.name}.`, "convictions", source(data, `convictions:${driver.name}`)));
