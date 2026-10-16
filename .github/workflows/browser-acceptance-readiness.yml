@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - 'review/signed-evidence-integrity-*'
+      - 'review/real-document-underwriting-*'
   pull_request:
     branches:
       - main
