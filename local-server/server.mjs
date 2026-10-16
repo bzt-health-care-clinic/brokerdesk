@@ -59,6 +59,11 @@ export const server = http.createServer(async (request, response) => {
     if (caseMatch && request.method === "PUT") { const body = await readJson(request); if (body?.case?.case_id !== caseMatch[1]) return sendJson(response, request, 400, { error: "Case id in URL does not match case id in request body" }); return sendJson(response, request, 200, repositories.upsertCase(body)); }
     if (caseMatch && request.method === "PATCH") { const body = await readJson(request); if (body.action === "archive") { repositories.archiveCase(caseMatch[1]); return sendJson(response, request, 200, { ok: true }); } if (body.action === "rename") return sendJson(response, request, 200, repositories.renameCase(caseMatch[1], body.label)); }
     if (caseMatch && request.method === "DELETE") { repositories.deleteCase(caseMatch[1]); return sendJson(response, request, 200, { ok: true }); }
+    const signedMatch = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/signed-verification$/);
+    if (signedMatch && request.method === "POST") {
+      const body = await readJson(request);
+      return sendJson(response, request, 200, repositories.saveSignedCase(signedMatch[1], body.case, body.action, body.details));
+    }
     const caseDocuments = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/documents$/);
     if (caseDocuments && request.method === "GET") return sendJson(response, request, 200, repositories.listDocuments(caseDocuments[1]));
     if (caseDocuments && request.method === "POST") { const form = await readForm(request); const file = form.get("file"); const record = JSON.parse(String(form.get("record") || "{}")); if (!(file instanceof File)) throw Object.assign(new Error("File is required"), { status: 400 }); const saved = repositories.saveDocument(caseDocuments[1], record, Buffer.from(await file.arrayBuffer()), file.name); return sendJson(response, request, 201, saved); }
