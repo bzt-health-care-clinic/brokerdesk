@@ -116,7 +116,9 @@ export class LocalRepositories {
     const file = this.documentPath(row.id);
     if (!file) return null;
     const record = parse(row.record_json);
-    if (!record.sourceHash || record.staleExtraction || cachedSourceHash(file.path) !== record.sourceHash) return null;
+    // A security-sensitive verification must hash actual bytes, not trust the mtime/size cache.
+    const actualHash = createHash("sha256").update(readFileSync(file.path)).digest("hex");
+    if (!record.sourceHash || record.staleExtraction || actualHash !== record.sourceHash) return null;
     const sections = this.logicalDocuments(row.id);
     if (logicalDocumentId) {
       const section = sections.find((candidate) => candidate.id === logicalDocumentId && candidate.documentType === expected && candidate.presenceStatus === "FOUND");
@@ -167,7 +169,17 @@ export class LocalRepositories {
       if (submitted?.case_id !== caseId || !["new_auto", "new_home"].includes(existing.case_type) || submitted.case_type !== existing.case_type) {
         throw signatureError("Signature transition is not valid for this case.", 400);
       }
-      let next = { ...submitted };
+      // A stale browser request must never move completion status or rewrite case identity.
+      // Physical document edits already auto-revoke signed state inside their own transaction;
+      // a subsequent browser notification is intentionally idempotent.
+      if ((action === "SIGNED_EVIDENCE_WITHDRAWN" || action === "SIGNED_EVIDENCE_INVALID") && !existing.signed) {
+        this.db.exec("COMMIT");
+        return existing;
+      }
+      if ((action === "SIGNED_EVIDENCE_WITHDRAWN" || action === "SIGNED_EVIDENCE_INVALID") && this.signedEvidenceStillValid(existing)) {
+        throw signatureError("The signed evidence is still valid; use manual unverify to revoke.");
+      }
+      let next = { ...submitted, case_id: existing.case_id, case_type: existing.case_type, status: existing.status };
       if (action === "SIGNED_VERIFIED") {
         const ref = this.signatureReference(existing, submitted.signed_document_id, submitted.signed_logical_document_id);
         if (!ref) throw signatureError("Signed application evidence is missing, changed, or not a current application section.");
