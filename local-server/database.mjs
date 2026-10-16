@@ -41,6 +41,32 @@ export function openDatabase(path) {
       id INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT, document_id TEXT, actor TEXT NOT NULL,
       action TEXT NOT NULL, details_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
     );
+    -- Pilot v0.3: a single authoritative local queue, later reachable over a
+    -- deliberately authenticated LAN service. Do not share the SQLite file.
+    CREATE TABLE IF NOT EXISTS outbound_submissions (
+      package_id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+      revision INTEGER NOT NULL, sha256 TEXT NOT NULL, filename TEXT NOT NULL, created_at TEXT NOT NULL,
+      UNIQUE(case_id,revision)
+    );
+    CREATE TABLE IF NOT EXISTS imported_packages (
+      package_id TEXT PRIMARY KEY, manifest_sha256 TEXT NOT NULL,
+      source_case_id TEXT NOT NULL, imported_case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+      revision INTEGER NOT NULL, system TEXT NOT NULL CHECK(system IN ('new-business','policy-change')),
+      broker_id TEXT NOT NULL, broker_name TEXT NOT NULL, submitted_at TEXT NOT NULL,
+      imported_at TEXT NOT NULL, manifest_json TEXT NOT NULL, original_filename TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS inbox_tasks (
+      package_id TEXT PRIMARY KEY REFERENCES imported_packages(package_id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_progress','completed')),
+      assignee TEXT, lease_until TEXT, claim_version INTEGER NOT NULL DEFAULT 0,
+      effective_date TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS pilot_auditors (
+      id TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_inbox_status ON inbox_tasks(status, effective_date, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_import_source ON imported_packages(source_case_id, revision);
     CREATE INDEX IF NOT EXISTS idx_cases_archived_updated ON cases(archived, updated_at DESC) WHERE deleted_at IS NULL;
     CREATE INDEX IF NOT EXISTS idx_cases_archived_created ON cases(archived, created_at DESC, id DESC) WHERE deleted_at IS NULL;
     CREATE INDEX IF NOT EXISTS idx_cases_search_insured ON cases(insured_name);
@@ -60,6 +86,11 @@ export function openDatabase(path) {
         AND json_type(section.value,'$.documentSubtype')='text' LIMIT 1
     ) WHERE document_subtype IS NULL`);
   }
+  // Second auditor is deliberately disabled until the LAN access/permission
+  // rollout is approved. A second local browser cannot bypass this flag.
+  const stamp = new Date().toISOString();
+  db.prepare("INSERT OR IGNORE INTO pilot_auditors(id,enabled,created_at) VALUES(?,?,?)").run("AUDITOR-1", 1, stamp);
+  db.prepare("INSERT OR IGNORE INTO pilot_auditors(id,enabled,created_at) VALUES(?,?,?)").run("AUDITOR-2", 0, stamp);
   return db;
 }
 
