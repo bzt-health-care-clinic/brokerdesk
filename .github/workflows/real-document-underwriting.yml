@@ -1,0 +1,48 @@
+name: BrokerDesk real-document-derived synthetic regressions
+on:
+  push:
+    branches:
+      - 'review/real-document-underwriting-*'
+  pull_request:
+    branches:
+      - main
+permissions:
+  contents: read
+jobs:
+  underwriting:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify private client data is not checked in
+        run: |
+          foreach ($file in @('.env', '.env.local', 'brokerdesk.db', 'Cal - fee.xlsx')) {
+            if (Test-Path -LiteralPath $file) { throw "Private client/account file should not be committed: $file" }
+          }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --include=dev --include=optional --no-audit --no-fund
+      - name: TypeScript check
+        run: |
+          & .\node_modules\.bin\tsc.cmd --noEmit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Real-doc-derived fixture checks (synthetic only)
+        run: |
+          node --experimental-strip-types tests/real-document-regressions.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-strip-types tests/package-analysis.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-strip-types tests/document-package.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-strip-types tests/case-completion.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-strip-types tests/signed-verification.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/signed-server-integrity.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
