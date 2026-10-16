@@ -179,7 +179,7 @@ export function evaluateIntakeWarnings(item:InsuranceCase, records:UploadedDocum
   const warnings: SupportIssue[]=[];
   const facts=item.intake_warning_facts;
   if (!facts) return warnings;
-  const referenceDate=calendarUtc(item.policy_change?.change_effective_date??item.policy?.effective_date);
+  const referenceDate=calendarUtc(item.policy_change?.change_effective_date || item.policy?.effective_date);
   const referenceYear=referenceDate===undefined?undefined:new Date(referenceDate).getUTCFullYear();
   const proofs=item.intake_support_evidence??[];
   for (const [index,vehicle] of (item.vehicles??[]).entries()) {
