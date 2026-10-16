@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { authoritativeIntake } from "./intake-bridge.mjs";
 import { createBdzip, readBdzip } from "./bdzip.mjs";
@@ -212,6 +212,8 @@ export class SubmissionPilotService {
     const target = resolve(packagesDir, safeId(manifest.package_id) + ".bdzip");
     if (!inside(packagesDir, target)) throw bad("Unsafe package location.");
     const staging = join(this.paths.temp, freshId("TMP") + ".bdzip");
+    if (existsSync(target)) throw bad("Package ID already has a stored archive but no completed import. Manual review required.", 409);
+    let archiveStored = false;
     try {
       writeFileSync(staging, archive);
       this.repo.upsertCase({ case: importedCase }, "IMPORT_CASE", { trustedSignature: true });
@@ -223,6 +225,8 @@ export class SubmissionPilotService {
       if (loaded.signed && !this.repo.signedEvidenceStillValid(loaded)) throw bad("Imported signed application evidence could not be verified.");
       if (loaded.transaction_authorization && !this.repo.transactionAuthorizationStillValid(loaded))
         throw bad("Imported transaction authorization evidence could not be verified.");
+      renameSync(staging, target);
+      archiveStored = true;
       this.db.exec("BEGIN IMMEDIATE");
       try {
         this.db.prepare(`INSERT INTO imported_packages(package_id,manifest_sha256,source_case_id,imported_case_id,revision,system,broker_id,broker_name,submitted_at,imported_at,manifest_json,original_filename)
@@ -237,12 +241,12 @@ export class SubmissionPilotService {
             submitted_at: manifest.submitted_at, profile: profile.profile_version, blockers: 0, warnings: [] });
         this.db.exec("COMMIT");
       } catch(e) {this.db.exec("ROLLBACK");throw e;}
-      renameSync(staging,target);
       return { imported:true, duplicate:false, package_id:manifest.package_id,
         case_id:caseId, system:manifest.system, preflight:profile };
     } catch(error) {
       try { this.repo.deleteCase(caseId); } catch {}
       try { rmSync(staging,{force:true}); } catch {}
+      if (archiveStored) try { rmSync(target,{force:true}); } catch {}
       throw error;
     }
   }
