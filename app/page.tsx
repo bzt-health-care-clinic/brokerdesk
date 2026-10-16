@@ -25,7 +25,7 @@ import { CaseSummary, localRepositories, StorageStats } from "@/lib/local-reposi
 import { validationHasStarted } from "@/lib/validation-workflow";
 import { openDocumentPicker } from "@/lib/file-picker";
 import { completionActionLabel, markCaseComplete, markCaseIncomplete } from "@/lib/case-completion";
-import { applySignedEvidenceWithdrawn, applySignedUnverified, applySignedVerified } from "@/lib/signed-verification";
+import { applySignedEvidenceWithdrawn, applySignedUnverified, applySignedVerified, isLegacyChecklistSignedId, isSignedEvidenceStillValid } from "@/lib/signed-verification";
 import { clampDocumentPanelWidth, DOCUMENT_PANEL_DEFAULT } from "@/lib/panel-width";
 import { createDefaultPolicyChangeState, isPolicyChange, normalizePolicyChangeTransactions, POLICY_CHANGE_TRANSACTIONS, policyChangeCanComplete, transactionSummary } from "@/lib/policy-change";
 import { confirmedNone, knownBoolean, mortgageDisplay, vehicleTenure } from "@/lib/fact-display";
@@ -114,13 +114,14 @@ export default function Home() {
   // items with checklist ids, while ingestedDocuments holds the real uploaded files
   // with real document ids. Verified 2026-10-16.
   const signedEvidenceOptions = useMemo(() => {
-    const options: { value: string; label: string; documentId: string; logicalDocumentId?: string }[] = [];
+    const options: { value: string; label: string; documentId: string; logicalDocumentId?: string; documentType: string; startPage?: number; endPage?: number }[] = [];
     for (const record of ingestedDocuments) {
       const isApplication = record.documentType === "AUTO_APPLICATION" || record.documentType === "HAB_APPLICATION";
       const withdrawn = record.withdrawnSectionRanges ?? [];
       const overlapsWithdrawn = (start?: number, end?: number) =>
         withdrawn.some((range) => (start ?? 1) <= range.endPage && (end ?? start ?? 1) >= range.startPage);
-      const sections = (record.logicalDocuments ?? []).filter((section) =>
+      const allSections = record.logicalDocuments ?? [];
+      const sections = allSections.filter((section) =>
         (section.documentType === "AUTO_APPLICATION" || section.documentType === "HAB_APPLICATION") &&
         section.presenceStatus === "FOUND" &&
         !overlapsWithdrawn(section.startPage, section.endPage));
@@ -131,10 +132,16 @@ export default function Home() {
             label: `${record.fileName || record.originalFileName || record.id} — ${section.title}`,
             documentId: record.id,
             logicalDocumentId: section.id,
+            documentType: section.documentType,
+            startPage: section.startPage,
+            endPage: section.endPage,
           });
         }
-      } else if (isApplication) {
-        options.push({ value: record.id, label: record.fileName || record.originalFileName || record.id, documentId: record.id });
+      } else if (isApplication && allSections.length === 0) {
+        // File-level fallback only when the file was never segmented: if it was
+        // re-segmented and no section qualifies anymore, offer nothing rather
+        // than a stale whole-file option.
+        options.push({ value: record.id, label: record.fileName || record.originalFileName || record.id, documentId: record.id, documentType: record.documentType });
       }
     }
     return options;
@@ -152,7 +159,30 @@ export default function Home() {
     skipNextNoteAutosaveRef.current = true;
     const staleRecords = records.filter((record) => record.staleExtraction);
     let hydrated = reconcileDocumentsIntoCase(selected, records);
+    // v7: a signed confirmation whose evidence no longer resolves against the
+    // uploaded files cannot stay trusted. This covers v5 legacy confirmations
+    // (checklist ids, which can never match a real file) and evidence that
+    // changed while the app was closed. Revoked once here: after revocation
+    // signed=false, so it never re-triggers.
+    let legacyEvidenceReason: string | undefined;
+    if (hydrated.signed) {
+      const validity = isSignedEvidenceStillValid(records, hydrated);
+      if (!validity.valid) {
+        legacyEvidenceReason =
+          validity.reason === "file-missing" && isLegacyChecklistSignedId(hydrated)
+            ? "legacy-checklist-id"
+            : validity.reason;
+        hydrated = applySignedUnverified(hydrated).next;
+      }
+    }
     if (staleRecords.length || JSON.stringify(hydrated) !== JSON.stringify(selected)) await localRepositories.cases.save(hydrated);
+    if (legacyEvidenceReason) {
+      await localRepositories.cases.recordAction(hydrated.case_id, "SIGNED_EVIDENCE_INVALID", {
+        reason: legacyEvidenceReason,
+        documentId: selected.signed_document_id ?? null,
+        logicalDocumentId: selected.signed_logical_document_id ?? null,
+      });
+    }
     window.localStorage.setItem("brokerdesk.lastCaseId", hydrated.case_id);
     setCaseData(hydrated); setSelectedCaseId(hydrated.case_id); setJsonText(JSON.stringify(hydrated, null, 2)); setIngestedDocuments(records); setCaseNotes(notes); setNote(notes[noteType] ?? ""); setActiveTab(isPolicyChange(hydrated) ? "change" : "overview"); previousStatusRef.current = hydrated.status; readyRef.current = true; setSaveState("saved"); requestAnimationFrame(() => centerPanelRef.current?.scrollTo({ top: 0 }));
   }
@@ -196,8 +226,18 @@ export default function Home() {
     try {
       const parsed = JSON.parse(jsonText) as InsuranceCase;
       if (!parsed.case_id || !parsed.case_type || !parsed.policy || !Array.isArray(parsed.documents)) throw new Error("Case ID, case type, policy, and documents are required.");
-      setCaseData(parsed);
-      setSelectedCaseId(parsed.case_id); readyRef.current = true;
+      // v7: an imported case cannot carry a trusted signed confirmation — the
+      // evidence chain cannot be verified at import time. Strip it and audit;
+      // the broker re-verifies through the normal control afterwards.
+      let imported = parsed;
+      if (parsed.signed) {
+        imported = applySignedUnverified(parsed).next;
+        void localRepositories.cases.recordAction(imported.case_id, "IMPORT_SIGNED_CLEARED", {
+          reason: "signed confirmations require re-verification after import",
+        });
+      }
+      setCaseData(imported);
+      setSelectedCaseId(imported.case_id); readyRef.current = true;
       setImportError("");
       setImportOpen(false);
     } catch (error) {
@@ -243,33 +283,90 @@ export default function Home() {
     setTimeout(() => setCopied(false), 1500);
   }
 
+  /**
+   * Shared save-then-audit flow for signed-verification state changes
+   * (verify / unverify / evidence withdrawn). The case is saved first and the
+   * audit event is written only after the save succeeds. If the audit write
+   * fails, the DB write is rolled back on a best-effort basis so the page and
+   * the database cannot silently diverge; the broker always gets an explicit
+   * message about what happened.
+   */
+  async function saveCaseThenAudit(
+    next: InsuranceCase,
+    previous: InsuranceCase,
+    action: string,
+    details: Record<string, unknown>,
+  ): Promise<boolean> {
+    setCaseData(next);
+    setSaveState("saving");
+    try {
+      await localRepositories.cases.save(next);
+    } catch {
+      setCaseData(previous);
+      setSaveState("failed");
+      window.alert("Could not save the case change. It was NOT recorded — please try again.");
+      return false;
+    }
+    try {
+      await localRepositories.cases.recordAction(next.case_id, action, details);
+    } catch {
+      try {
+        await localRepositories.cases.save(previous);
+        setCaseData(previous);
+        setSaveState("failed");
+        window.alert("The audit record could not be written, so the change was rolled back and NOT recorded. Please try again.");
+      } catch {
+        setSaveState("failed");
+        window.alert("Data may be inconsistent: the case was saved but the audit record is missing. Please verify the case and the audit log manually before continuing.");
+      }
+      return false;
+    }
+    previousStatusRef.current = next.status;
+    try {
+      await refreshCaseList();
+    } catch {
+      // Non-critical: the case and audit are already persisted.
+    }
+    setSaveState("saved");
+    return true;
+  }
+
   async function updateIngestedDocuments(records: UploadedDocumentRecord[]) {
     setIngestedDocuments(records);
     const removedIds = ingestedDocuments.filter((record) => !records.some((candidate) => candidate.id === record.id)).map((record) => record.id);
     let next = caseData;
     for (const removedId of removedIds) next = removeDocumentFromCase(next, removedId, records);
     next = reconcileDocumentsIntoCase(next, records);
-    // If the uploaded file backing a signed confirmation was deleted or withdrawn,
-    // the confirmation is no longer trustworthy: clear it (and drop a keyed case back
+    // If the uploaded file backing a signed confirmation was deleted, the
+    // confirmation is no longer trustworthy: clear it (and drop a keyed case back
     // to incomplete) and audit the change. Persisted immediately, not via autosave.
     const withdrawal = applySignedEvidenceWithdrawn(next, removedIds);
-    setCaseData(withdrawal.next);
-    if (!withdrawal.withdrawn) return;
-    const previous = caseData;
-    setSaveState("saving");
-    try {
-      await localRepositories.cases.save(withdrawal.next);
-      await localRepositories.cases.recordAction(withdrawal.next.case_id, "SIGNED_EVIDENCE_WITHDRAWN", {
-        documentId: previous.signed_document_id ?? null,
-        ...(withdrawal.statusChanged ? { statusChanged: withdrawal.statusChanged } : {}),
-      });
-      previousStatusRef.current = withdrawal.next.status;
-      await refreshCaseList();
-      setSaveState("saved");
-    } catch {
-      setSaveState("failed");
-      window.alert("The signed evidence was removed but the case update could not be saved. Please verify the case status before continuing.");
+    next = withdrawal.next;
+    let revoked = withdrawal.withdrawn;
+    let revokeReason: string | undefined = withdrawal.withdrawn ? "file-deleted" : undefined;
+    let statusChanged = withdrawal.statusChanged;
+    // v7: a physical-file deletion is not the only way evidence dies. If a
+    // section was re-classified, its pages changed, or it was withdrawn inside
+    // the same PDF, the file id is unchanged but the confirmation must still go.
+    if (next.signed && !revoked) {
+      const validity = isSignedEvidenceStillValid(records, next);
+      if (!validity.valid) {
+        const revokedChange = applySignedUnverified(next);
+        next = revokedChange.next;
+        statusChanged = revokedChange.statusChanged;
+        revoked = true;
+        revokeReason = validity.reason;
+      }
     }
+    setCaseData(next);
+    if (!revoked) return;
+    const previous = caseData;
+    await saveCaseThenAudit(next, previous, "SIGNED_EVIDENCE_WITHDRAWN", {
+      documentId: previous.signed_document_id ?? null,
+      logicalDocumentId: previous.signed_logical_document_id ?? null,
+      reason: revokeReason,
+      ...(statusChanged ? { statusChanged } : {}),
+    });
   }
 
   function confirmProposedDriver(proposal: ProposedDriver) {
@@ -324,51 +421,52 @@ export default function Home() {
     }
   }
   // "Signed application verified" is a manual broker action only. Verified 2026-10-16:
-  // nothing in reconciliation, OCR, document ingestion or JSON import logic ever sets
-  // signed=true on its own — the broker ticks the box after visually verifying the
-  // signed document. State transitions live in lib/signed-verification.ts (pure and
-  // unit-tested). Persistence and audit are sequential, not fire-and-forget: the case
-  // is saved first and the audit event is written only after the save succeeds; any
-  // failure rolls the checkbox back and tells the broker nothing was recorded.
+  // nothing in reconciliation, OCR or document ingestion ever sets signed=true
+  // on its own — the broker ticks the box after visually verifying the signed
+  // document. JSON import actively strips any signed confirmation (v7) since the
+  // evidence chain cannot be verified at import time. State transitions live in
+  // lib/signed-verification.ts (pure and unit-tested). Persistence and audit are
+  // sequential with best-effort compensation: the case is saved first and the
+  // audit event is written only after the save succeeds; if the audit write
+  // fails, the DB change is rolled back when possible and the broker is told
+  // exactly what happened instead of a silent divergence.
   async function toggleSignedVerified(verified: boolean) {
     const previous = caseData;
     if (verified) {
+      // Evidence is mandatory: without a real uploaded file/section there is
+      // nothing to verify against. The checkbox is disabled when there are no
+      // options, but guard anyway.
+      if (!signedEvidenceChoice) {
+        window.alert("Upload a signed application file first, then verify it.");
+        return;
+      }
       const verifiedAt = new Date().toISOString();
-      const next = applySignedVerified(
+      const result = applySignedVerified(
         caseData,
-        signedEvidenceChoice ? { documentId: signedEvidenceChoice.documentId, logicalDocumentId: signedEvidenceChoice.logicalDocumentId } : undefined,
+        {
+          documentId: signedEvidenceChoice.documentId,
+          logicalDocumentId: signedEvidenceChoice.logicalDocumentId,
+          documentType: signedEvidenceChoice.documentType,
+          startPage: signedEvidenceChoice.startPage,
+          endPage: signedEvidenceChoice.endPage,
+        },
         verifiedAt,
       );
-      setCaseData(next); setSaveState("saving");
-      try {
-        await localRepositories.cases.save(next);
-        await localRepositories.cases.recordAction(next.case_id, "SIGNED_VERIFIED", {
-          documentId: next.signed_document_id ?? null,
-          logicalDocumentId: next.signed_logical_document_id ?? null,
-          verifiedAt,
-        });
-        previousStatusRef.current = next.status;
-        await refreshCaseList();
-        setSaveState("saved");
-      } catch {
-        setCaseData(previous); setSaveState("failed");
-        window.alert("Could not save the signed confirmation. It was NOT recorded — please try again.");
+      if (!result.ok) {
+        window.alert("Select the signed application file first, then verify it.");
+        return;
       }
+      const next = result.next;
+      await saveCaseThenAudit(next, previous, "SIGNED_VERIFIED", {
+        documentId: next.signed_document_id ?? null,
+        logicalDocumentId: next.signed_logical_document_id ?? null,
+        verifiedAt,
+      });
       return;
     }
     const { next, statusChanged } = applySignedUnverified(caseData);
-    setCaseData(next); setSaveState("saving");
-    try {
-      await localRepositories.cases.save(next);
-      await localRepositories.cases.recordAction(next.case_id, "SIGNED_UNVERIFIED", statusChanged ? { statusChanged } : {});
-      previousStatusRef.current = next.status;
-      await refreshCaseList();
-      setSaveState("saved");
-      setSignedDocChoice(undefined);
-    } catch {
-      setCaseData(previous); setSaveState("failed");
-      window.alert("Could not save the change. The signed confirmation was NOT revoked — please try again.");
-    }
+    const ok = await saveCaseThenAudit(next, previous, "SIGNED_UNVERIFIED", statusChanged ? { statusChanged } : {});
+    if (ok) setSignedDocChoice(undefined);
   }
   async function markComplete() {
     if (isPolicyChange(caseData) && !policyChangeCanComplete(caseData)) { window.alert("This policy change still has a blocker or pending underwriting approval."); return; }
@@ -446,7 +544,7 @@ export default function Home() {
 
         <section ref={centerPanelRef} className="keyin-panel panel">
           {carrierRuleFor(caseData.policy.company)?.groupDiscountFirst && <GroupDiscountCard validation={groupReview.validation} onSelect={setGroupSelected} onConfirmMembership={confirmMembership} />}
-          <div className="case-title"><div><p className="eyebrow">{caseData.case_id} · {titleCase(caseData.case_type)}</p><h1>{caseData.insured.name || "Unnamed client"}</h1><p>{caseData.policy.company || "Carrier not entered"} · Eff. {caseData.policy.effective_date || "not entered"} · Quote {caseData.policy.quote_number || "not entered"}</p></div><div className="case-title-actions"><Button size="sm" variant="outline" onClick={() => void renameCase()}>Rename</Button><Button size="sm" variant="outline" onClick={() => void archiveCase()}><Archive /> Archive</Button><Button size="sm" variant="outline" className="delete-case" onClick={() => void deleteCase()}><Trash2 /> Delete</Button>{!isPolicyChange(caseData) && <div className="signed-verify"><label><input type="checkbox" checked={Boolean(caseData.signed)} onChange={(event) => void toggleSignedVerified(event.target.checked)} /> Signed application verified</label>{!caseData.signed && signedEvidenceChoice && <><Select value={signedEvidenceChoice.value} onValueChange={setSignedDocChoice}><SelectTrigger size="sm" aria-label="Signed application document"><SelectValue /></SelectTrigger><SelectContent>{signedEvidenceOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select><a href={localRepositories.documents.openUrl(signedEvidenceChoice.documentId)} target="_blank" rel="noreferrer">Open source</a></>}<small>Confirm only after you have verified the signed application document.</small></div>}<Button size="sm" variant="outline" onClick={() => void (status === "keyed" ? markIncomplete() : markComplete())}>{completionActionLabel(status)}</Button><StartKeyIn data={caseData} assessment={claims} alerts={activeAlerts} onStart={beginValidation} /><div className="case-score"><span>{alerts.filter((item) => item.resolved).length}</span><small>resolved</small></div></div></div>
+          <div className="case-title"><div><p className="eyebrow">{caseData.case_id} · {titleCase(caseData.case_type)}</p><h1>{caseData.insured.name || "Unnamed client"}</h1><p>{caseData.policy.company || "Carrier not entered"} · Eff. {caseData.policy.effective_date || "not entered"} · Quote {caseData.policy.quote_number || "not entered"}</p></div><div className="case-title-actions"><Button size="sm" variant="outline" onClick={() => void renameCase()}>Rename</Button><Button size="sm" variant="outline" onClick={() => void archiveCase()}><Archive /> Archive</Button><Button size="sm" variant="outline" className="delete-case" onClick={() => void deleteCase()}><Trash2 /> Delete</Button>{!isPolicyChange(caseData) && <div className="signed-verify"><label><input type="checkbox" checked={Boolean(caseData.signed)} disabled={!caseData.signed && signedEvidenceOptions.length === 0} onChange={(event) => void toggleSignedVerified(event.target.checked)} /> Signed application verified</label>{!caseData.signed && signedEvidenceChoice && <><Select value={signedEvidenceChoice.value} onValueChange={setSignedDocChoice}><SelectTrigger size="sm" aria-label="Signed application document"><SelectValue /></SelectTrigger><SelectContent>{signedEvidenceOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select><a href={localRepositories.documents.openUrl(signedEvidenceChoice.documentId)} target="_blank" rel="noreferrer">Open source</a></>}{!caseData.signed && signedEvidenceOptions.length === 0 && <small>Upload a signed application file first.</small>}<small>Confirm only after you have verified the signed application document.</small></div>}<Button size="sm" variant="outline" onClick={() => void (status === "keyed" ? markIncomplete() : markComplete())}>{completionActionLabel(status)}</Button><StartKeyIn data={caseData} assessment={claims} alerts={activeAlerts} onStart={beginValidation} /><div className="case-score"><span>{alerts.filter((item) => item.resolved).length}</span><small>resolved</small></div></div></div>
           <Tabs value={activeTab} onValueChange={setActiveTab} className="case-tabs"><TabsList variant="line" className="tab-strip">{tabs.map((tab) => <TabsTrigger key={tab} value={tab}>{tab === "prior" ? "Prior Insurance" : titleCase(tab)}</TabsTrigger>)}</TabsList><div className="tab-body"><TabsContent value="overview"><Overview data={caseData} isHab={isHab} /></TabsContent><TabsContent value="driver"><DriverView data={caseData} proposals={proposedDrivers(ingestedDocuments, caseData.drivers)} onConfirm={confirmProposedDriver} /></TabsContent><TabsContent value="vehicle"><VehicleView data={caseData} /></TabsContent><TabsContent value="prior"><PriorView data={caseData} /></TabsContent><TabsContent value="claims"><ClaimsView assessment={claims} /></TabsContent><TabsContent value="coverage"><CoverageView data={caseData} /></TabsContent><TabsContent value="property"><PropertyView data={caseData} /></TabsContent>{isPolicyChange(caseData) && <TabsContent value="change"><PolicyChangeView key={caseData.case_id} data={caseData} onChange={updatePolicyChange} /></TabsContent>}<TabsContent value="payment"><PaymentView data={caseData} /></TabsContent></div></Tabs>
           {isPolicyChange(caseData) && <NameChangeSection data={caseData} onChange={updatePolicyChange} />}
         </section>
