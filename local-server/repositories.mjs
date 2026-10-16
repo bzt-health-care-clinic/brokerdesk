@@ -372,6 +372,7 @@ export class LocalRepositories {
   exportBackup() {
     const stamp = now().replace(/[:.]/g, "-"); const staging = resolve(this.paths.temp, `backup-${stamp}`); mkdirSync(staging, { recursive: true }); const snapshot = join(staging, "brokerdesk.db");
     this.db.exec(`VACUUM INTO '${snapshot.replaceAll("'", "''")}'`); const documentTarget = join(staging, "documents"); if (existsSync(this.paths.documents)) copyFileTree(this.paths.documents, documentTarget);
+    if (existsSync(this.paths.packages)) copyFileTree(this.paths.packages, join(staging, "packages"));
     const stats = this.stats(); writeFileSync(join(staging, "manifest.json"), json({ backupTimestamp: now(), brokerDeskVersion: "0.1.0-local", databaseFilename: "brokerdesk.db", documentCount: stats.documentCount, caseCount: stats.caseCount }), "utf8");
     const destination = join(this.paths.backups, `brokerdesk-backup-${stamp}.zip`); writeZip(staging, destination); rmSync(staging, { recursive: true, force: true }); audit(this.db, "EXPORT_BACKUP", { details: { filename: basename(destination) } }); return { path: destination, filename: basename(destination) };
   }
