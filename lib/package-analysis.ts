@@ -4,6 +4,19 @@ import type { DocumentType, LogicalDocument, PackagePage, ParsedSource, Suggeste
 import { sectionRevision } from "./active-evidence.ts";
 
 export const PACKAGE_EMBEDDED_TEXT_MIN_CHARACTERS = 40;
+/**
+ * Detect broken ToUnicode/CMap data. Some selectable G4Sign text has plenty
+ * of characters, but contains control bytes and repeated macron glyphs.
+ * It must go through the *configured* OCR path, or remain NEEDS_REVIEW if
+ * OCR is unavailable. Never treat garbage text as a validated field.
+ */
+export function embeddedTextNeedsOcr(text: string): boolean {
+  if (text.trim().length < PACKAGE_EMBEDDED_TEXT_MIN_CHARACTERS) return true;
+  const sample = text.slice(0, 12000);
+  const nonWhitespace = sample.replace(/\s/g, "").length;
+  const suspect = (sample.match(/[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u00af]/g) ?? []).length;
+  return suspect >= 6 && suspect / Math.max(nonWhitespace, 1) >= 0.015;
+}
 const REPEATED_SINGLE_DOCUMENT_TYPES = new Set<DocumentType>(["OWNERSHIP", "BILL_OF_SALE", "DRIVER_TRAINING_CERTIFICATE", "VEHICLE_PHOTO"]);
 const label = (type: DocumentType) => type.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
 const hash = (value: string | Uint8Array) => { let result = 2166136261; const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value; for (const byte of bytes) result = Math.imul(result ^ byte, 16777619); return (result >>> 0).toString(16); };
@@ -97,8 +110,26 @@ export async function analyzePdfPackage(record: UploadedDocumentRecord, file: Fi
   let current: UploadedDocumentRecord = { ...record, extractionVersion: EXTRACTION_PIPELINE_VERSION, parserVersion: PARSER_VERSION, staleExtraction: false, pageCount: source.pageCount, containerType: source.pageCount > 1 ? "COMBINED_AUTO_PACKAGE" : record.containerType, packagePages: [...pages].sort((a, b) => a.page - b.page), packageProgress: { status: "ANALYZING", processed: pages.length, total: source.pageCount, embedded: pages.filter((page) => page.extractionProvider === "embedded_pdf_text").length, ocr: pages.filter((page) => page.extractionProvider === "ocr_space" || page.extractionProvider === "paddle_ocr").length, failed: pages.filter((page) => page.extractionStatus === "FAILED").length, updatedAt: new Date().toISOString() } };
   let persistChain = Promise.resolve(); const persist = async () => { current.packagePages = [...pages].sort((a, b) => a.page - b.page); current.packageProgress = { status: "ANALYZING", processed: pages.length, total: source.pageCount, embedded: pages.filter((page) => page.extractionProvider === "embedded_pdf_text").length, ocr: pages.filter((page) => page.extractionProvider === "ocr_space").length, failed: pages.filter((page) => page.extractionStatus === "FAILED").length, updatedAt: new Date().toISOString() }; const snapshot = structuredClone(current); persistChain = persistChain.then(async () => { await options.onProgress?.(snapshot); }); await persistChain; };
   try {
-    let cursor = 0; const worker = async () => { while (cursor < pending.length) { const pageNumber = pending[cursor++]; try { const embedded = await source.embeddedText(pageNumber); if (embedded.length >= PACKAGE_EMBEDDED_TEXT_MIN_CHARACTERS) pages.push({ page: pageNumber, pageNumber, text: embedded, confidence: .99, extractionProvider: "embedded_pdf_text", extractionStatus: "COMPLETE", classification: classifyDocument(record.fileName, "application/pdf", embedded), sourceHash: hash(embedded) }); else { const derivative = await source.renderPage(pageNumber, Math.floor(options.maxOcrBytes * .9)); try { const extracted = await ocr.extract(derivative, { pageCount: 1, startPage: 1, endPage: 1 }); const text = normalizeOcrText(extracted.text ?? extracted.pages?.map((page) => page.text ?? "").join("\n") ?? ""); pages.push({ page: pageNumber, pageNumber, text, blocks: extracted.pages?.[0]?.blocks as never, rotation: extracted.pages?.[0]?.rotation, confidence: extracted.confidence ?? .8, extractionProvider: String(extracted.metadata?.provider ?? "ocr_space") === "paddle_ocr" ? "paddle_ocr" : "ocr_space", extractionStatus: text ? "COMPLETE" : "FAILED", classification: classifyDocument(record.fileName, "image/jpeg", text), sourceHash: hash(new Uint8Array(await derivative.arrayBuffer())), error: text ? undefined : "OCR returned no text." }); } finally { /* Browser derivative is released after this iteration and is never persisted. */ } } } catch (error) { pages.push({ page: pageNumber, pageNumber, text: "", confidence: 0, extractionProvider: "none", extractionStatus: "FAILED", classification: { documentType: "OTHER", confidence: .1, reason: "Page extraction failed." }, sourceHash: "", error: error instanceof Error ? error.message : "Page extraction failed." }); } await persist(); } };
+    let cursor = 0; const worker = async () => { while (cursor < pending.length) { const pageNumber = pending[cursor++]; try { const embedded = await source.embeddedText(pageNumber); if (!embeddedTextNeedsOcr(embedded)) pages.push({ page: pageNumber, pageNumber, text: embedded, confidence: .99, extractionProvider: "embedded_pdf_text", extractionStatus: "COMPLETE", classification: classifyDocument(record.fileName, "application/pdf", embedded), sourceHash: hash(embedded) }); else { const derivative = await source.renderPage(pageNumber, Math.floor(options.maxOcrBytes * .9)); try { const extracted = await ocr.extract(derivative, { pageCount: 1, startPage: 1, endPage: 1 }); const text = normalizeOcrText(extracted.text ?? extracted.pages?.map((page) => page.text ?? "").join("\n") ?? ""); pages.push({ page: pageNumber, pageNumber, text, blocks: extracted.pages?.[0]?.blocks as never, rotation: extracted.pages?.[0]?.rotation, confidence: extracted.confidence ?? .8, extractionProvider: String(extracted.metadata?.provider ?? "ocr_space") === "paddle_ocr" ? "paddle_ocr" : "ocr_space", extractionStatus: text ? "COMPLETE" : "FAILED", classification: classifyDocument(record.fileName, "image/jpeg", text), sourceHash: hash(new Uint8Array(await derivative.arrayBuffer())), error: text ? undefined : "OCR returned no text." }); } finally { /* Browser derivative is released after this iteration and is never persisted. */ } } } catch (error) { pages.push({ page: pageNumber, pageNumber, text: "", confidence: 0, extractionProvider: "none", extractionStatus: "FAILED", classification: { documentType: "OTHER", confidence: .1, reason: "Page extraction failed." }, sourceHash: "", error: error instanceof Error ? error.message : "Page extraction failed." }); } await persist(); } };
     await Promise.all(Array.from({ length: Math.max(1, Math.min(2, options.concurrency ?? 1, pending.length || 1)) }, worker));
+    // A G4Sign/signed-application package is one application with many pages,
+    // not unrelated documents based on incidental phrases ("Leased: No",
+    // "Driver Training: No", etc.). Use cover identity only when unambiguous.
+    const signedPacket = /^g4sign[\s._-]/i.test(record.fileName) || /signed.*(?:home|hab|auto).*app/i.test(record.fileName);
+    if (signedPacket) {
+      const cover = pages.filter(page => page.page <= 2).map(page => page.text ?? "").join("\n");
+      const hasHab = /\bHABITATIONAL\s+INSURANCE\b/i.test(cover);
+      const hasAuto = /\bAUTOMOBILE\s+INSURANCE\b/i.test(cover);
+      const family = hasHab !== hasAuto ? (hasHab ? "HAB_APPLICATION" : "AUTO_APPLICATION") : undefined;
+      if (family) {
+        for (const page of pages) if (page.extractionStatus === "COMPLETE" &&
+          !/^\s*(?:DASH\s+DRIVER\s+REPORT|MVR\s+ABSTRACTS|ONTARIO\s+DRIVING\s+RECORD)\b/im.test(page.text ?? "")) {
+          page.classification = { documentType: family, confidence: .95, reason: "Confirmed signed application package cover." };
+        }
+        record = { ...record, documentType: family,
+          classification: { documentType: family, confidence: .95, reason: "Signed application package cover." } };
+      }
+    }
     const { manual, suggestions } = discoverLogicalSections(record, pages); const accepted = suggestions.filter((item) => item.suggestionStatus === "ACCEPTED"); const logicalDocuments = [...manual, ...accepted]; const parsedSources = await parseSections(record, pages, logicalDocuments);
     const failed = pages.filter((page) => page.extractionStatus === "FAILED").length; const charactersExtracted = pages.reduce((total, page) => total + (page.text?.length ?? 0), 0);
     const unanimousType = !failed && pages.length && pages.every(page => page.classification.documentType === pages[0].classification.documentType) && pages[0].classification.documentType !== "OTHER" ? pages[0].classification : undefined;

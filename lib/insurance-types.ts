@@ -378,6 +378,11 @@ export type AlertCode =
   | "PROPERTY_INSURED_SINCE_CONFLICT"
   | "MORTGAGE_MISSING"
   | "PAYMENT_MISMATCH"
+  | "PRIOR_NONPAYMENT_CANCELLATION_REVIEW"
+  | "LICENCE_HISTORY_UW_REVIEW"
+  | "MULTILINE_DISCOUNT_SUPPORT_REVIEW"
+  | "MONTHLY_PAYMENT_FEE_REVIEW"
+  | "SIGNATURE_DATE_REVIEW"
   | "SUPPORTING_DOCUMENT_MISSING";
 
 export type Phase3AlertCode =
@@ -497,6 +502,7 @@ export interface ClientConfirmedFact {
 
 export interface BrokerOverride {
   alert_code: Alert["code"];
+  evidence_fingerprint?: string;
   reason: string;
   confirmed_by: string;
   confirmed_at: string;

@@ -43,11 +43,54 @@ const CLASSIFIERS: { type: DocumentType; score: number; patterns: RegExp[]; reas
   { type: "AUTO_QUOTE", score: .9, patterns: [/auto.*quote/i, /vehicle.*quote/i], reason: "Filename identifies an Auto quote." },
 ];
 
+/**
+ * Filename and document titles identify documents; incidental field labels do
+ * not. In particular "Driver Training: No", "Leased: No" and "Mortgages: 1"
+ * must not turn a Quote or signed application into those document types.
+ */
 export function classifyDocument(fileName: string, mimeType: string, text = ""): ClassificationResult {
-  const haystack = `${fileName}\n${text.slice(0, 15000)}`;
-  for (const candidate of CLASSIFIERS) if (candidate.patterns.some((pattern) => pattern.test(haystack))) return { documentType: candidate.type, confidence: candidate.score, reason: candidate.reason };
-  if (mimeType.startsWith("image/")) return { documentType: "PORTAL_SCREENSHOT", confidence: .43, reason: "Image detected; manual classification required." };
-  return { documentType: "OTHER", confidence: .35, reason: "No reliable document marker found; manual classification required." };
+  const name = fileName.replace(/[._-]+/g, " ").trim();
+  const head = text.slice(0, 1600);
+  const from = (documentType: DocumentType, reason: string, confidence = .95): ClassificationResult =>
+    ({ documentType, confidence, reason });
+
+  const isSignaturePacket = /^g4sign[\s._-]/i.test(fileName);
+  if (isSignaturePacket) {
+    if (/\bHABITATIONAL\s+INSURANCE\b|\bAPPLICATION\s+FOR\s+HABITATIONAL\s+INSURANCE\b/i.test(head))
+      return from("HAB_APPLICATION", "G4Sign habitational packet identified by cover/application title.");
+    if (/\bAUTOMOBILE\s+INSURANCE\b|\bOAF\s*1\b|\bAPPLICATION\s+FOR\s+AUTOMOBILE\s+INSURANCE\b/i.test(head))
+      return from("AUTO_APPLICATION", "G4Sign automobile packet identified by cover/application title.");
+    return from("OTHER", "G4Sign packet requires an application title or broker classification.", .35);
+  }
+  if (/\b(?:signed\s+)?(?:home|hab|habitational|tenant|condo)\s+app(?:lication)?\b/i.test(name))
+    return from("HAB_APPLICATION", "Filename identifies a signed habitational application.");
+  if (/\b(?:signed\s+)?auto\s+app(?:lication)?\b/i.test(name))
+    return from("AUTO_APPLICATION", "Filename identifies an auto application.");
+  if (/\bowern\s*ship\b/i.test(name))
+    return from("OWNERSHIP", "Filename identifies a rotated/scanned Ontario ownership permit.");
+
+  // Explicit filenames outrank long unrelated body text or generic labels.
+  for (const candidate of CLASSIFIERS)
+    if (candidate.patterns.some(pattern => pattern.test(name)))
+      return from(candidate.type, "Document filename identifies its type.", candidate.score);
+
+  // These categories need a stand-alone TITLE, not just a word in a quote.
+  const specialized: Partial<Record<DocumentType, RegExp>> = {
+    DRIVER_TRAINING_CERTIFICATE: /^(?:driver\s+training\s+(?:graduation\s+)?certificate|driving\s+school\s+graduation|certificate\s+of\s+driver\s+training)\b/im,
+    LEASE_DOCUMENT: /^(?:vehicle\s+)?(?:lease\s+agreement|leasing\s+contract)\b/im,
+    FINANCE_DOCUMENT: /^(?:vehicle\s+)?(?:finance\s+agreement|financing\s+agreement|lienholder\s+agreement)\b/im,
+    MORTGAGE_DOCUMENT: /^(?:mortgage\s+agreement|mortgage\s+statement|mortgagee\s+information)\b/im,
+    PRIOR_PROPERTY_POLICY: /^(?:prior|previous)\s+(?:home|property)\s+insurance\s+policy\b/im,
+    PRIOR_AUTO_POLICY: /^(?:prior|previous)\s+auto\s+insurance\s+policy\b/im,
+  };
+  for (const candidate of CLASSIFIERS) {
+    const titleRequired = specialized[candidate.type];
+    const matched = titleRequired ? titleRequired.test(head) : candidate.patterns.some(pattern => pattern.test(head));
+    if (matched) return from(candidate.type, candidate.reason, candidate.score);
+  }
+  if (mimeType.startsWith("image/"))
+    return from("PORTAL_SCREENSHOT", "Image detected; visual/filename classification required.", .43);
+  return from("OTHER", "No reliable document title; manual classification required.", .35);
 }
 
 export class BrowserFileStore {

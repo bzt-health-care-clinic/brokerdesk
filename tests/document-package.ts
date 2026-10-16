@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { activeDocumentTypes, applyDocumentPresence, documentTypeIsFound } from "../lib/document-package.ts";
 import type { LogicalDocument, UploadedDocumentRecord } from "../lib/extraction-types.ts";
-import { openDatabase } from "../local-server/database.mjs";
+import { openDatabase, migrateLogicalDocuments } from "../local-server/database.mjs";
 import { resolveDataPaths } from "../local-server/paths.mjs";
 import { LocalRepositories } from "../local-server/repositories.mjs";
 
@@ -36,6 +36,9 @@ try {
   db.prepare("DELETE FROM logical_documents WHERE physical_file_id=?").run(record.id);
   const legacyRecord = { ...reopened }; delete legacyRecord.logicalDocuments;
   db.prepare("UPDATE documents SET record_json=? WHERE id=?").run(JSON.stringify(legacyRecord), record.id);
+  // listDocuments is intentionally read-only: migration belongs at server startup.
+  assert.equal(repo.listDocuments(caseItem.case_id)[0].logicalDocuments.length, 0);
+  migrateLogicalDocuments(db);
   const migrated = repo.listDocuments(caseItem.case_id)[0]; assert.equal(migrated.logicalDocuments.length, 1); assert.equal(migrated.logicalDocuments[0].classificationSource, "MIGRATED");
   repo.deleteDocument(record.id); assert.equal(existsSync(physicalPath), false); assert.equal(repo.logicalDocuments(record.id).length, 0);
 
