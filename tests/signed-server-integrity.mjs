@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -45,6 +45,19 @@ try {
   assert.equal(verified.signed_document_id, "SOURCE1");
   assert.equal(eventCount("SIGNED_VERIFIED"), 1);
 
+  // Cached (mtime,size) file hashes must not authorize altered signed bytes.
+  const signedPath = repo.documentPath("SOURCE1").path;
+  const initialBytes = readFileSync(signedPath);
+  const initialStat = statSync(signedPath);
+  const changedBytes = Buffer.from(initialBytes);
+  changedBytes[0] ^= 1;
+  writeFileSync(signedPath, changedBytes);
+  utimesSync(signedPath, initialStat.atime, initialStat.mtime);
+  assert.equal(repo.signatureReference(get(), "SOURCE1", "SECTION1"), null);
+  writeFileSync(signedPath, initialBytes);
+  utimesSync(signedPath, initialStat.atime, initialStat.mtime);
+  assert.ok(repo.signatureReference(get(), "SOURCE1", "SECTION1"));
+
   // An ordinary PUT cannot remove approval fields or substitute another source.
   repo.upsertCase({ case: { ...verified, signed: false, signed_document_id: "FAKE" } });
   assert.equal(get().signed, true);
@@ -67,6 +80,11 @@ try {
   assert.equal(get().signed, false);
   assert.equal(get().status, "incomplete");
   assert.equal(eventCount("SIGNED_EVIDENCE_WITHDRAWN"), 1);
+  // UI notifications after the server auto-revoked must not duplicate events.
+  const redundant = repo.saveSignedCase(caseId, { ...get(), signed: false }, "SIGNED_EVIDENCE_WITHDRAWN");
+  assert.equal(redundant.signed, false);
+  assert.equal(eventCount("SIGNED_EVIDENCE_WITHDRAWN"), 1);
+
 
   // A second file is signed and then removed via the document endpoint.
   const second = upload("SOURCE2", "SECTION2");
