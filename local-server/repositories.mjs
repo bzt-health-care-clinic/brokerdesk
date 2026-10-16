@@ -264,8 +264,10 @@ export class LocalRepositories {
       const item=this.getCase(safeId(caseId)); if(!item)throw signatureError("Case not found.",404);
       const purpose=String(request?.purpose??""),code=String(request?.code??"").toUpperCase(),
         subject=String(request?.subjectKey??"").trim(),types=supportDocs[purpose]?.[code];
-      if(!types || !subject || !validSubjects(supportedVehicles(item)) ||
-        !validSubjects(supportedPeople(item))) throw signatureError("Invalid evidence purpose or ambiguous insured subject.",400);
+      const targetType=purpose==="DISCOUNT"&&discountSubjects[code]==="DRIVER"?"DRIVER":"VEHICLE";
+      const possibleTargets=targetType==="DRIVER"?supportedPeople(item):supportedVehicles(item);
+      if(!types||!subject||!validSubjects(possibleTargets))
+        throw signatureError("Invalid evidence purpose or ambiguous current evidence subject.",400);
       const identity=purpose+"|"+code+"|"+subject;
       const before=item.intake_support_evidence??[];
       const next={...item,intake_support_evidence:before.filter(p=>supportIdentity(p)!==identity)};
