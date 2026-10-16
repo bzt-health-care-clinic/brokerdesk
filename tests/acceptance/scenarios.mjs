@@ -27,6 +27,14 @@ export async function runScenario(id, page, rt, result) {
     const before = await cases(); await page.getByRole('button', { name: type, exact: true }).click();
     await page.getByRole('button', { name: /^(New case|Create a new case)$/ }).click();
     const record = await poll(async () => (await cases()).find(x => !before.some(b => b.id === x.id)), 'one UI-created case');
+    // Backend Case creation is visible before the async UI selection has settled.
+    // Never click Rename while the previous Case may still own the header.
+    await poll(async () => {
+      const title = await page.locator('.case-title .eyebrow').textContent().catch(() => "");
+      const active = page.locator('.local-case-list button[aria-current="page"]');
+      return title?.includes(record.id) && (await active.count()) === 1 &&
+        (await active.locator('strong').textContent())?.trim() === record.label;
+    }, 'newly created case selected before rename', 20000);
     await page.locator('.case-title-actions').getByRole('button', { name: 'Rename', exact: true }).waitFor();
     await prompts(() => page.locator('.case-title-actions').getByRole('button', { name: 'Rename', exact: true }).click(), () => label);
     await poll(async () => (await saved(record.id)).label === label, 'case rename persisted'); return record.id;
