@@ -46,7 +46,7 @@ export async function pilotCompareInsuredNames(id:string,request:{
 export async function pilotAuthorize(id: string,
   request: {verified: boolean; documentId?: string; logicalDocumentId?: string; signers?: Array<{
     name:string;documentId:string;logicalDocumentId?:string;signaturePage:number;verified:boolean;
-  }>): Promise<InsuranceCase> {
+  }>; }): Promise<InsuranceCase> {
   const response = await checked(await fetch(`${API}/cases/${encodeURIComponent(id)}/change-authorization`,{
     method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(request)}));
   return response.json();
