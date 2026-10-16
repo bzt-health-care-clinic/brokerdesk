@@ -2,10 +2,10 @@
 // No customer uploads, keys, email or LAN services are used.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createServer } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { createBlankHabCase } from "../lib/case-factories.ts";
 import { openDatabase } from "../local-server/database.mjs";
@@ -15,7 +15,7 @@ import { SubmissionPilotService } from "../local-server/submission-service.mjs";
 
 const front="http://127.0.0.1:5193",api="http://127.0.0.1:47843";
 const temp=mkdtempSync(join(tmpdir(),"bd-pilot-ui-"));
-const root=resolve(new URL("../", import.meta.url).pathname.replace(/^\/(\w):\//,"$1:/"));
+const root=fileURLToPath(new URL("../",import.meta.url));
 const env=Object.fromEntries(["PATH","Path","SystemRoot","WINDIR","TEMP","TMP","COMSPEC","PATHEXT","USERPROFILE","HOME","APPDATA","LOCALAPPDATA"]
   .filter(k=>process.env[k]).map(k=>[k,process.env[k]]));
 Object.assign(env,{BROKERDESK_DATA_DIR:temp,BROKERDESK_LOCAL_API_PORT:"47843",
