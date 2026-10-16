@@ -25,6 +25,7 @@ import { CaseSummary, localRepositories, StorageStats } from "@/lib/local-reposi
 import { validationHasStarted } from "@/lib/validation-workflow";
 import { openDocumentPicker } from "@/lib/file-picker";
 import { completionActionLabel, markCaseComplete, markCaseIncomplete } from "@/lib/case-completion";
+import { applySignedEvidenceWithdrawn, applySignedUnverified, applySignedVerified } from "@/lib/signed-verification";
 import { clampDocumentPanelWidth, DOCUMENT_PANEL_DEFAULT } from "@/lib/panel-width";
 import { createDefaultPolicyChangeState, isPolicyChange, normalizePolicyChangeTransactions, POLICY_CHANGE_TRANSACTIONS, policyChangeCanComplete, transactionSummary } from "@/lib/policy-change";
 import { confirmedNone, knownBoolean, mortgageDisplay, vehicleTenure } from "@/lib/fact-display";
@@ -108,7 +109,37 @@ export default function Home() {
   const confirm = activeAlerts.filter((item) => item.severity !== "high");
   const isHab = Boolean(caseData.habitational_risk);
   const visibleDocs = caseData.documents.filter((doc) => doc.name.toLowerCase().includes(search.toLowerCase()));
-  const signedAppDocs = caseData.documents.filter((doc) => doc.category === "signed_application" && doc.received);
+  // "Signed application verified" must reference the actual uploaded PDF (or one of its
+  // logical sections), not the document checklist: caseData.documents holds checklist
+  // items with checklist ids, while ingestedDocuments holds the real uploaded files
+  // with real document ids. Verified 2026-10-16.
+  const signedEvidenceOptions = useMemo(() => {
+    const options: { value: string; label: string; documentId: string; logicalDocumentId?: string }[] = [];
+    for (const record of ingestedDocuments) {
+      const isApplication = record.documentType === "AUTO_APPLICATION" || record.documentType === "HAB_APPLICATION";
+      const withdrawn = record.withdrawnSectionRanges ?? [];
+      const overlapsWithdrawn = (start?: number, end?: number) =>
+        withdrawn.some((range) => (start ?? 1) <= range.endPage && (end ?? start ?? 1) >= range.startPage);
+      const sections = (record.logicalDocuments ?? []).filter((section) =>
+        (section.documentType === "AUTO_APPLICATION" || section.documentType === "HAB_APPLICATION") &&
+        section.presenceStatus === "FOUND" &&
+        !overlapsWithdrawn(section.startPage, section.endPage));
+      if (sections.length > 0) {
+        for (const section of sections) {
+          options.push({
+            value: `${record.id}:${section.id}`,
+            label: `${record.fileName || record.originalFileName || record.id} — ${section.title}`,
+            documentId: record.id,
+            logicalDocumentId: section.id,
+          });
+        }
+      } else if (isApplication) {
+        options.push({ value: record.id, label: record.fileName || record.originalFileName || record.id, documentId: record.id });
+      }
+    }
+    return options;
+  }, [ingestedDocuments]);
+  const signedEvidenceChoice = signedEvidenceOptions.find((option) => option.value === signedDocChoice) ?? signedEvidenceOptions[0];
 
   async function refreshCaseList(query = caseSearch, archived = showArchived) {
     const items = await localRepositories.cases.list(query, archived);
@@ -212,13 +243,33 @@ export default function Home() {
     setTimeout(() => setCopied(false), 1500);
   }
 
-  function updateIngestedDocuments(records: UploadedDocumentRecord[]) {
+  async function updateIngestedDocuments(records: UploadedDocumentRecord[]) {
     setIngestedDocuments(records);
-    setCaseData((current) => {
-      let next = current;
-      for (const removed of ingestedDocuments.filter((record) => !records.some((candidate) => candidate.id === record.id))) next = removeDocumentFromCase(next, removed.id, records);
-      return reconcileDocumentsIntoCase(next, records);
-    });
+    const removedIds = ingestedDocuments.filter((record) => !records.some((candidate) => candidate.id === record.id)).map((record) => record.id);
+    let next = caseData;
+    for (const removedId of removedIds) next = removeDocumentFromCase(next, removedId, records);
+    next = reconcileDocumentsIntoCase(next, records);
+    // If the uploaded file backing a signed confirmation was deleted or withdrawn,
+    // the confirmation is no longer trustworthy: clear it (and drop a keyed case back
+    // to incomplete) and audit the change. Persisted immediately, not via autosave.
+    const withdrawal = applySignedEvidenceWithdrawn(next, removedIds);
+    setCaseData(withdrawal.next);
+    if (!withdrawal.withdrawn) return;
+    const previous = caseData;
+    setSaveState("saving");
+    try {
+      await localRepositories.cases.save(withdrawal.next);
+      await localRepositories.cases.recordAction(withdrawal.next.case_id, "SIGNED_EVIDENCE_WITHDRAWN", {
+        documentId: previous.signed_document_id ?? null,
+        ...(withdrawal.statusChanged ? { statusChanged: withdrawal.statusChanged } : {}),
+      });
+      previousStatusRef.current = withdrawal.next.status;
+      await refreshCaseList();
+      setSaveState("saved");
+    } catch {
+      setSaveState("failed");
+      window.alert("The signed evidence was removed but the case update could not be saved. Please verify the case status before continuing.");
+    }
   }
 
   function confirmProposedDriver(proposal: ProposedDriver) {
@@ -275,18 +326,48 @@ export default function Home() {
   // "Signed application verified" is a manual broker action only. Verified 2026-10-16:
   // nothing in reconciliation, OCR, document ingestion or JSON import logic ever sets
   // signed=true on its own — the broker ticks the box after visually verifying the
-  // signed document. Every change is audit-logged (SIGNED_VERIFIED / SIGNED_UNVERIFIED)
-  // and persists through the normal autosave path.
-  function toggleSignedVerified(verified: boolean) {
+  // signed document. State transitions live in lib/signed-verification.ts (pure and
+  // unit-tested). Persistence and audit are sequential, not fire-and-forget: the case
+  // is saved first and the audit event is written only after the save succeeds; any
+  // failure rolls the checkbox back and tells the broker nothing was recorded.
+  async function toggleSignedVerified(verified: boolean) {
+    const previous = caseData;
     if (verified) {
-      const documentId = signedDocChoice ?? signedAppDocs[0]?.id;
       const verifiedAt = new Date().toISOString();
-      setCaseData((current) => ({ ...current, signed: true, signed_verified_at: verifiedAt, signed_document_id: documentId }));
-      void localRepositories.cases.recordAction(caseData.case_id, "SIGNED_VERIFIED", { documentId: documentId ?? null, verifiedAt });
-    } else {
-      setCaseData((current) => ({ ...current, signed: false, signed_verified_at: undefined, signed_document_id: undefined }));
+      const next = applySignedVerified(
+        caseData,
+        signedEvidenceChoice ? { documentId: signedEvidenceChoice.documentId, logicalDocumentId: signedEvidenceChoice.logicalDocumentId } : undefined,
+        verifiedAt,
+      );
+      setCaseData(next); setSaveState("saving");
+      try {
+        await localRepositories.cases.save(next);
+        await localRepositories.cases.recordAction(next.case_id, "SIGNED_VERIFIED", {
+          documentId: next.signed_document_id ?? null,
+          logicalDocumentId: next.signed_logical_document_id ?? null,
+          verifiedAt,
+        });
+        previousStatusRef.current = next.status;
+        await refreshCaseList();
+        setSaveState("saved");
+      } catch {
+        setCaseData(previous); setSaveState("failed");
+        window.alert("Could not save the signed confirmation. It was NOT recorded — please try again.");
+      }
+      return;
+    }
+    const { next, statusChanged } = applySignedUnverified(caseData);
+    setCaseData(next); setSaveState("saving");
+    try {
+      await localRepositories.cases.save(next);
+      await localRepositories.cases.recordAction(next.case_id, "SIGNED_UNVERIFIED", statusChanged ? { statusChanged } : {});
+      previousStatusRef.current = next.status;
+      await refreshCaseList();
+      setSaveState("saved");
       setSignedDocChoice(undefined);
-      void localRepositories.cases.recordAction(caseData.case_id, "SIGNED_UNVERIFIED", {});
+    } catch {
+      setCaseData(previous); setSaveState("failed");
+      window.alert("Could not save the change. The signed confirmation was NOT revoked — please try again.");
     }
   }
   async function markComplete() {
@@ -365,7 +446,7 @@ export default function Home() {
 
         <section ref={centerPanelRef} className="keyin-panel panel">
           {carrierRuleFor(caseData.policy.company)?.groupDiscountFirst && <GroupDiscountCard validation={groupReview.validation} onSelect={setGroupSelected} onConfirmMembership={confirmMembership} />}
-          <div className="case-title"><div><p className="eyebrow">{caseData.case_id} · {titleCase(caseData.case_type)}</p><h1>{caseData.insured.name || "Unnamed client"}</h1><p>{caseData.policy.company || "Carrier not entered"} · Eff. {caseData.policy.effective_date || "not entered"} · Quote {caseData.policy.quote_number || "not entered"}</p></div><div className="case-title-actions"><Button size="sm" variant="outline" onClick={() => void renameCase()}>Rename</Button><Button size="sm" variant="outline" onClick={() => void archiveCase()}><Archive /> Archive</Button><Button size="sm" variant="outline" className="delete-case" onClick={() => void deleteCase()}><Trash2 /> Delete</Button>{!isPolicyChange(caseData) && <div className="signed-verify"><label><input type="checkbox" checked={Boolean(caseData.signed)} onChange={(event) => toggleSignedVerified(event.target.checked)} /> Signed application verified</label>{!caseData.signed && signedAppDocs.length > 0 && <Select value={signedDocChoice && signedAppDocs.some((doc) => doc.id === signedDocChoice) ? signedDocChoice : signedAppDocs[0].id} onValueChange={setSignedDocChoice}><SelectTrigger size="sm" aria-label="Signed application document"><SelectValue /></SelectTrigger><SelectContent>{signedAppDocs.map((doc) => <SelectItem key={doc.id} value={doc.id}>{doc.name}</SelectItem>)}</SelectContent></Select>}<small>Confirm only after you have verified the signed application document.</small></div>}<Button size="sm" variant="outline" onClick={() => void (status === "keyed" ? markIncomplete() : markComplete())}>{completionActionLabel(status)}</Button><StartKeyIn data={caseData} assessment={claims} alerts={activeAlerts} onStart={beginValidation} /><div className="case-score"><span>{alerts.filter((item) => item.resolved).length}</span><small>resolved</small></div></div></div>
+          <div className="case-title"><div><p className="eyebrow">{caseData.case_id} · {titleCase(caseData.case_type)}</p><h1>{caseData.insured.name || "Unnamed client"}</h1><p>{caseData.policy.company || "Carrier not entered"} · Eff. {caseData.policy.effective_date || "not entered"} · Quote {caseData.policy.quote_number || "not entered"}</p></div><div className="case-title-actions"><Button size="sm" variant="outline" onClick={() => void renameCase()}>Rename</Button><Button size="sm" variant="outline" onClick={() => void archiveCase()}><Archive /> Archive</Button><Button size="sm" variant="outline" className="delete-case" onClick={() => void deleteCase()}><Trash2 /> Delete</Button>{!isPolicyChange(caseData) && <div className="signed-verify"><label><input type="checkbox" checked={Boolean(caseData.signed)} onChange={(event) => void toggleSignedVerified(event.target.checked)} /> Signed application verified</label>{!caseData.signed && signedEvidenceChoice && <><Select value={signedEvidenceChoice.value} onValueChange={setSignedDocChoice}><SelectTrigger size="sm" aria-label="Signed application document"><SelectValue /></SelectTrigger><SelectContent>{signedEvidenceOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select><a href={localRepositories.documents.openUrl(signedEvidenceChoice.documentId)} target="_blank" rel="noreferrer">Open source</a></>}<small>Confirm only after you have verified the signed application document.</small></div>}<Button size="sm" variant="outline" onClick={() => void (status === "keyed" ? markIncomplete() : markComplete())}>{completionActionLabel(status)}</Button><StartKeyIn data={caseData} assessment={claims} alerts={activeAlerts} onStart={beginValidation} /><div className="case-score"><span>{alerts.filter((item) => item.resolved).length}</span><small>resolved</small></div></div></div>
           <Tabs value={activeTab} onValueChange={setActiveTab} className="case-tabs"><TabsList variant="line" className="tab-strip">{tabs.map((tab) => <TabsTrigger key={tab} value={tab}>{tab === "prior" ? "Prior Insurance" : titleCase(tab)}</TabsTrigger>)}</TabsList><div className="tab-body"><TabsContent value="overview"><Overview data={caseData} isHab={isHab} /></TabsContent><TabsContent value="driver"><DriverView data={caseData} proposals={proposedDrivers(ingestedDocuments, caseData.drivers)} onConfirm={confirmProposedDriver} /></TabsContent><TabsContent value="vehicle"><VehicleView data={caseData} /></TabsContent><TabsContent value="prior"><PriorView data={caseData} /></TabsContent><TabsContent value="claims"><ClaimsView assessment={claims} /></TabsContent><TabsContent value="coverage"><CoverageView data={caseData} /></TabsContent><TabsContent value="property"><PropertyView data={caseData} /></TabsContent>{isPolicyChange(caseData) && <TabsContent value="change"><PolicyChangeView key={caseData.case_id} data={caseData} onChange={updatePolicyChange} /></TabsContent>}<TabsContent value="payment"><PaymentView data={caseData} /></TabsContent></div></Tabs>
           {isPolicyChange(caseData) && <NameChangeSection data={caseData} onChange={updatePolicyChange} />}
         </section>

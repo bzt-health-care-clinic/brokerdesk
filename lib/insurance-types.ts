@@ -538,6 +538,7 @@ export interface InsuranceCase {
   signed?: boolean;
   signed_verified_at?: string;
   signed_document_id?: string;
+  signed_logical_document_id?: string;
   group_discount?: GroupDiscountValidation;
   client_confirmed_facts?: ClientConfirmedFact[];
   broker_overrides?: BrokerOverride[];
