@@ -79,10 +79,34 @@ try {
   page.setDefaultTimeout(20000);
   await page.goto(front+"/inbox",{waitUntil:"domcontentloaded"});
   await page.getByRole("heading",{name:"Authoritative submission inbox"}).waitFor();
+  // Observe the actual UI-triggered HTTP request. A missing success message
+  // can otherwise conceal CORS failures, wrong API ports or server rejection.
+  const browserIssues=[];
+  page.on("pageerror",e=>browserIssues.push("pageerror: "+e.message));
+  page.on("requestfailed",r=>browserIssues.push("requestfailed: "+r.method()+" "+r.url()+" "+r.failure()?.errorText));
+  page.on("console",m=>{if(m.type()==="error")browserIssues.push("console: "+m.text());});
+  const attempted=page.waitForResponse(r=>r.url().includes("/submissions/import")&&r.request().method()==="POST",
+    {timeout:30000});
   await page.getByLabel("Import BDZIP package").setInputFiles({
     name:bundle.filename,mimeType:"application/zip",buffer:bundle.archive
   });
-  await page.getByText(/Imported .* Routed into new-business/).waitFor({timeout:60000});
+  try {
+    const response=await attempted;
+    const body=await response.text();
+    assert.equal(response.status(),201,"Actual UI import rejected ("+response.url()+"): "+body.slice(0,2000));
+    const result=JSON.parse(body);
+    assert.equal(result.imported,true,"UI import must create the submitted Case");
+    assert.equal(result.system,"new-business","Manifest must route into New Business inbox");
+    await page.getByText(/Imported .* Routed into new-business/).waitFor({timeout:20000});
+  } catch(error) {
+    console.error("PILOT_BROWSER_IMPORT_DEBUG: "+String(error));
+    console.error("PILOT_BROWSER_UI_TEXT: "+(await page.locator("body").innerText().catch(()=>"unavailable")).slice(0,3500));
+    console.error("PILOT_BROWSER_REQUESTS: "+JSON.stringify(browserIssues.slice(-18)));
+    console.error("PILOT_BROWSER_BACKEND_LOG: "+back.log().slice(-4500));
+    console.error("PILOT_BROWSER_FRONTEND_LOG: "+ui.log().slice(-4500));
+    console.error("PILOT_BROWSER_DB_TASK_COUNT: "+pilot.listInbox("new-business").length);
+    throw error;
+  }
   await page.getByRole("button",{name:"Take Case"}).waitFor();
   await page.getByRole("button",{name:"Take Case"}).click();
   await page.getByRole("button",{name:"Open Case"}).waitFor();
