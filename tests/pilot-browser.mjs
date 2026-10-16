@@ -77,14 +77,32 @@ try {
   const context=await browser.newContext();
   const page=await context.newPage();
   page.setDefaultTimeout(20000);
-  await page.goto(front+"/inbox",{waitUntil:"domcontentloaded"});
-  await page.getByRole("heading",{name:"Authoritative submission inbox"}).waitFor();
-  // Observe the actual UI-triggered HTTP request. A missing success message
-  // can otherwise conceal CORS failures, wrong API ports or server rejection.
   const browserIssues=[];
   page.on("pageerror",e=>browserIssues.push("pageerror: "+e.message));
   page.on("requestfailed",r=>browserIssues.push("requestfailed: "+r.method()+" "+r.url()+" "+r.failure()?.errorText));
   page.on("console",m=>{if(m.type()==="error")browserIssues.push("console: "+m.text());});
+  // The heading is server-rendered BEFORE React attaches onChange handlers.
+  // Wait for both client useEffect inbox requests as proof of hydration,
+  // otherwise setInputFiles can silently dispatch before the handler exists.
+  const hydratedInbox=Promise.all(["new-business","policy-change"].map(channel=>
+    page.waitForResponse(r=>r.url()===api+"/inbox?system="+channel &&
+      r.request().method()==="GET",{timeout:60000})));
+  await page.goto(front+"/inbox",{waitUntil:"domcontentloaded"});
+  await page.getByRole("heading",{name:"Authoritative submission inbox"}).waitFor();
+  try {
+    for(const response of await hydratedInbox){
+      assert.equal(response.status(),200,"Hydrated inbox channel must be readable: "+response.url());
+      assert(Array.isArray(await response.json()),"Hydrated inbox response must be an array");
+    }
+  } catch(error) {
+    console.error("PILOT_BROWSER_HYDRATION_DEBUG: "+String(error));
+    console.error("PILOT_BROWSER_UI_TEXT: "+(await page.locator("body").innerText().catch(()=>"unavailable")).slice(0,3000));
+    console.error("PILOT_BROWSER_REQUESTS: "+JSON.stringify(browserIssues.slice(-18)));
+    console.error("PILOT_BROWSER_BACKEND_LOG: "+back.log().slice(-3500));
+    console.error("PILOT_BROWSER_FRONTEND_LOG: "+ui.log().slice(-3500));
+    throw error;
+  }
+  // Assert the actual upload POST and authoritative server result below.
   const attempted=page.waitForResponse(r=>r.url().includes("/submissions/import")&&r.request().method()==="POST",
     {timeout:30000});
   await page.getByLabel("Import BDZIP package").setInputFiles({
