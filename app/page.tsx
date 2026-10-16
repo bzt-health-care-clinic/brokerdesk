@@ -291,44 +291,34 @@ export default function Home() {
    * the database cannot silently diverge; the broker always gets an explicit
    * message about what happened.
    */
+  // One server transaction persists the signature state and its audit event.
+  // Ordinary autosaves cannot change signed fields.
   async function saveCaseThenAudit(
     next: InsuranceCase,
     previous: InsuranceCase,
     action: string,
     details: Record<string, unknown>,
   ): Promise<boolean> {
-    setCaseData(next);
     setSaveState("saving");
     try {
-      await localRepositories.cases.save(next);
-    } catch {
-      setCaseData(previous);
-      setSaveState("failed");
-      window.alert("Could not save the case change. It was NOT recorded — please try again.");
-      return false;
-    }
-    try {
-      await localRepositories.cases.recordAction(next.case_id, action, details);
-    } catch {
+      const persisted = await localRepositories.cases.signedTransition(next, action, details);
+      setCaseData(persisted);
+      previousStatusRef.current = persisted.status;
+      await refreshCaseList().catch(() => undefined);
+      setSaveState("saved");
+      return true;
+    } catch (error) {
+      // The server rejects the transaction atomically. Never guess its state
+      // from an optimistic checkbox; reload its authoritative record.
       try {
-        await localRepositories.cases.save(previous);
-        setCaseData(previous);
-        setSaveState("failed");
-        window.alert("The audit record could not be written, so the change was rolled back and NOT recorded. Please try again.");
-      } catch {
-        setSaveState("failed");
-        window.alert("Data may be inconsistent: the case was saved but the audit record is missing. Please verify the case and the audit log manually before continuing.");
-      }
+        const actual = await localRepositories.cases.get(next.case_id);
+        setCaseData(actual);
+        previousStatusRef.current = actual.status;
+      } catch { setCaseData(previous); }
+      setSaveState("failed");
+      window.alert(error instanceof Error ? error.message : "Signature verification failed. Please retry.");
       return false;
     }
-    previousStatusRef.current = next.status;
-    try {
-      await refreshCaseList();
-    } catch {
-      // Non-critical: the case and audit are already persisted.
-    }
-    setSaveState("saved");
-    return true;
   }
 
   async function updateIngestedDocuments(records: UploadedDocumentRecord[]) {
