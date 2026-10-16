@@ -272,10 +272,21 @@ export default function Home() {
   async function markComplete() {
     if (isPolicyChange(caseData) && !policyChangeCanComplete(caseData)) { window.alert("This policy change still has a blocker or pending underwriting approval."); return; }
     if (!isPolicyChange(caseData)) {
-      // New business has no policyChangeCanComplete gate: block on the same complete
-      // rule set the QA panel shows (runRules + runPhase3Rules), computed unconditionally
-      // so the gate holds even before "Start key-in" was pressed. This covers phase-3
-      // highs such as missing drivers, missing MVR received dates and CTSAC issues.
+      // New business has no policyChangeCanComplete gate. deriveStatus treats an
+      // unsigned application and a pending UW referral as blockers outside the alert
+      // system, so the gate must check them independently: a clean High alert list
+      // alone is not enough to mark KEYED. Each check gets its own message.
+      if (!caseData.signed) { window.alert("Application is not signed. Confirm signing before marking complete."); return; }
+      if (caseData.uw_referral_pending) { window.alert("Underwriting referral is still pending. Wait for the UW decision before marking complete."); return; }
+      // A carrier group discount whose selection was never confirmed is only a medium
+      // alert, but completing with an undecided discount would mis-state the premium.
+      // evaluateGroupDiscount returns NOT_CONFIRMED only when the carrier has a group
+      // discount rule, so no extra carrier check is needed. NOT_APPLICABLE and
+      // NOT_SELECTED do not block.
+      if (groupReview.validation.status === "NOT_CONFIRMED") { window.alert("Group discount selection is not confirmed. Confirm whether the group discount is selected before marking complete."); return; }
+      // Block on the same complete rule set the QA panel shows (runRules + runPhase3Rules),
+      // computed unconditionally so the gate holds even before "Start key-in" was pressed.
+      // This covers phase-3 highs such as missing drivers, missing MVR received dates and CTSAC issues.
       // Medium EVIDENCE_REVIEW alerts must not block, or the normal review workflow would deadlock.
       const blockers = [...runRules(caseData, DEFAULT_RULE_CONFIG, claims), ...runPhase3Rules(caseData)].filter((item) => !item.resolved && item.severity === "high");
       const pendingReview = ingestedDocuments.some((record) => record.state === "NEEDS_REVIEW");
