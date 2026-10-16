@@ -1,0 +1,58 @@
+name: BrokerDesk LAN pilot submission integrity
+on:
+  push:
+    branches:
+      - feature/broker-auditor-lan-pilot
+  pull_request:
+    branches:
+      - main
+permissions:
+  contents: read
+jobs:
+  pilot:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject customer files and local data in checkout
+        run: |
+          foreach ($file in @('.env', '.env.local', 'brokerdesk.db', 'Cal - fee.xlsx')) {
+            if (Test-Path -LiteralPath $file) { throw "Sensitive local file is not allowed in CI" }
+          }
+          $packages = @(git ls-files '*.bdzip' '*.sqlite' '*.db')
+          if ($packages.Count -ne 0) { throw "Submission archives and databases must not be committed" }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked application dependencies
+        run: npm ci --include=dev --include=optional --no-audit --no-fund
+      - name: TypeScript
+        run: |
+          & .\node_modules\.bin\tsc.cmd --noEmit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Server and package syntax
+        run: |
+          node --check local-server/bdzip.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check local-server/submission-service.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check local-server/server.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check tests/submission-pilot.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Synthetic broker-auditor package and inbox E2E
+        run: |
+          node --experimental-transform-types tests/submission-pilot.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Signed authorization and existing case completion regression
+        run: |
+          node --experimental-transform-types tests/signed-verification.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-transform-types tests/case-completion.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/signed-server-integrity.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
