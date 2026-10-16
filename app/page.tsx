@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { IngestionPanel } from "@/components/ingestion-panel";
+import { SubmissionPanel } from "@/components/submission-panel";
 import { UploadedDocumentRecord } from "@/lib/extraction-types";
 import { Alert, DEFAULT_RULE_CONFIG, FieldSource, FieldSourceName, InsuranceCase, PolicyChangeItem, PolicyChangeTransactionType } from "@/lib/insurance-types";
 import { createBlankAutoCase } from "@/lib/case-factories";
@@ -52,6 +53,8 @@ function SourceValues({ values }: { values: { source: string; value: unknown }[]
   if (!values?.length) return null;
   return <div className="source-values">{values.map((item, index) => <div key={`${item.source}-${index}`}><span>{titleCase(item.source)}</span><strong>{typeof item.value === "object" ? JSON.stringify(item.value) : String(item.value ?? "Missing")}</strong></div>)}</div>;
 }
+
+const brokerMode = process.env.NEXT_PUBLIC_BROKERDESK_MODE === "broker";
 
 export default function Home() {
   const [caseData, setCaseData] = useState<InsuranceCase>(() => createBlankAutoCase());
@@ -504,7 +507,7 @@ export default function Home() {
   </div>;
 
   if (!selectedCaseId && saveState === "loading") return <main className="app-shell empty-shell"><header className="topbar"><div className="brand"><div className="brand-mark"><ShieldCheck /></div><div><p>BrokerDesk</p><span>Key-in & Audit Assistant</span></div></div></header><section className="empty-landing loading-landing" role="status" aria-live="polite"><LoaderCircle className="loading-spinner" /><p className="eyebrow">Local workspace</p><h1>Opening BrokerDesk</h1><p>Loading your last case and saved documents…</p></section></main>;
-  if (!selectedCaseId) return <main className="app-shell empty-shell"><header className="topbar"><div className="brand"><div className="brand-mark"><ShieldCheck /></div><div><p>BrokerDesk</p><span>Key-in & Audit Assistant</span></div></div></header><section className="empty-landing"><ShieldCheck /><p className="eyebrow">Local single-user workspace</p><h1>No case selected</h1><p>Select a case type, then create a case when you are ready. Nothing is created automatically.</p>{newCaseTypeSelector}<Button onClick={() => void newCase()} disabled={creatingCase} aria-busy={creatingCase}><Plus /> {creatingCase ? "Creating…" : "New case"}</Button></section></main>;
+  if (!selectedCaseId) return <main className="app-shell empty-shell"><header className="topbar"><div className="brand"><div className="brand-mark"><ShieldCheck /></div><div><p>BrokerDesk</p><span>Key-in & Audit Assistant</span></div></div></header><section className="empty-landing"><ShieldCheck /><p className="eyebrow">Local single-user workspace</p><h1>No case selected</h1><p>Select a case type, then create a case when you are ready. Nothing is created automatically.</p>{!brokerMode&&<a href="/inbox">Open the Auditor Inbox</a>}{newCaseTypeSelector}<Button onClick={() => void newCase()} disabled={creatingCase} aria-busy={creatingCase}><Plus /> {creatingCase ? "Creating…" : "New case"}</Button></section></main>;
 
   return (
     <main className="app-shell">
@@ -516,11 +519,12 @@ export default function Home() {
           <span className={`save-state save-${saveState}`} role="status" aria-live="polite">{titleCase(saveState)}</span>
         </div>
         <div className="header-actions">
-          <Dialog open={importOpen} onOpenChange={setImportOpen}>
+          {!brokerMode && <Dialog open={importOpen} onOpenChange={setImportOpen}>
             <DialogTrigger asChild><Button variant="outline" className="import-button" aria-label="Import case JSON" title="Import case JSON"><FileJson /> Import JSON</Button></DialogTrigger>
             <DialogContent className="max-w-3xl"><DialogHeader><DialogTitle>Import mock case JSON</DialogTitle><DialogDescription>Paste a normalized case object. Original source values remain visible after conflict resolution.</DialogDescription></DialogHeader><Textarea className="json-editor" value={jsonText} onChange={(event) => setJsonText(event.target.value)} />{importError && <p className="form-error">{importError}</p>}<DialogFooter><Button variant="outline" onClick={() => setImportOpen(false)}>Cancel</Button><Button onClick={importJson}>Run validation</Button></DialogFooter></DialogContent>
-          </Dialog>
-          <Button variant="outline" onClick={() => void openStorageSettings()} aria-label="Open local storage settings" title="Storage settings"><Settings /> Storage</Button>
+          </Dialog>}
+          {!brokerMode && <Button variant="outline" onClick={() => void openStorageSettings()} aria-label="Open local storage settings" title="Storage settings"><Settings /> Storage</Button>}
+          {!brokerMode&&<a href="/inbox" className="pilot-inbox-link">Auditor Inbox</a>}
           <Button onClick={() => void newCase()} disabled={creatingCase} aria-busy={creatingCase} aria-label="Create a new case" title="Create new case"><Plus /> {creatingCase ? "Creating…" : "New case"}</Button>
         </div>
       </header>
@@ -547,6 +551,14 @@ export default function Home() {
         </section>
 
         <aside className="review-panel panel">
+          {brokerMode && <SubmissionPanel data={caseData} records={ingestedDocuments} saveState={saveState}
+            onCaseSaved={setCaseData} onNavigate={field => {
+              if (field.startsWith("policy_change") || field.includes("authorization")) setActiveTab("change");
+              else if (field.startsWith("vehicles") || field.includes("ownership")) setActiveTab("vehicle");
+              else if (field.includes("driver") || field.includes("mvr")) setActiveTab("driver");
+              else if (field.includes("payment")) setActiveTab("payment");
+              else setActiveTab("overview");
+            }} />}
           <div className="panel-heading"><div><p className="eyebrow">Rule engine</p><h1>QA review</h1></div><div className="alert-total" aria-label={`${activeAlerts.length} active review items`}>{activeAlerts.length}</div></div>
           {!validationStarted ? <div className="validation-not-started"><ShieldCheck /><strong>Validation not started</strong><p>Upload documents or start key-in to begin validation.</p></div> : <><ReviewGroup title="Critical issues" count={critical.length} tone="critical">{critical.length ? critical.map((item, index) => <AlertCard key={`${item.id}-${index}`} alert={item} data={caseData} onResolve={resolveAlert} onOverride={overrideAlert} />) : <EmptyReview label="No critical issues" />}</ReviewGroup><ReviewGroup title="Missing / confirm" count={confirm.length} tone="confirm">{confirm.length ? confirm.map((item, index) => <AlertCard key={`${item.id}-${index}`} alert={item} data={caseData} onResolve={resolveAlert} onOverride={overrideAlert} />) : <EmptyReview label="Nothing awaiting confirmation" />}</ReviewGroup></>}
           {validationStarted && manualDecisionCandidates.length > 0 && <div className="manual-evidence-decision">
