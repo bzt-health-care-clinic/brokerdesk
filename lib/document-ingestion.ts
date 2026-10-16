@@ -44,7 +44,7 @@ const CLASSIFIERS: { type: DocumentType; score: number; patterns: RegExp[]; reas
 ];
 
 export function classifyDocument(fileName: string, mimeType: string, text = ""): ClassificationResult {
-  const haystack = `${fileName}\n${text.slice(0, 5000)}`;
+  const haystack = `${fileName}\n${text.slice(0, 15000)}`;
   for (const candidate of CLASSIFIERS) if (candidate.patterns.some((pattern) => pattern.test(haystack))) return { documentType: candidate.type, confidence: candidate.score, reason: candidate.reason };
   if (mimeType.startsWith("image/")) return { documentType: "PORTAL_SCREENSHOT", confidence: .43, reason: "Image detected; manual classification required." };
   return { documentType: "OTHER", confidence: .35, reason: "No reliable document marker found; manual classification required." };

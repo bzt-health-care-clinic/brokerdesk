@@ -41,6 +41,22 @@ export function discoverLogicalSections(record: UploadedDocumentRecord, pages: P
       else { if (relation === "REVIEW") uncertain.add(groups.at(-1)!); groups.push([page]); if (relation === "REVIEW") uncertain.add(groups.at(-1)!); }
     } else if (sameContinuousDocument && !isDriverReport(page.classification.documentType)) groups.at(-1)!.push(page); else groups.push([page]);
   }
+  // Attach page-continuous OTHER-classified pages to adjacent driver-report groups instead of
+  // silently dropping them: continuation pages often lack title keywords and get classified OTHER.
+  // The group is marked uncertain so the broker must review the boundary before accepting.
+  const otherPages = pages.filter((page) => page.extractionStatus === "COMPLETE" && page.classification.documentType === "OTHER" && !manualPages.has(page.page) && !record.withdrawnSectionRanges?.some(range => page.page >= range.startPage && page.page <= range.endPage)).sort((a, b) => a.page - b.page);
+  for (const group of groups) {
+    if (!isDriverReport(group[0].classification.documentType)) continue;
+    let nextPage = group.at(-1)!.page + 1;
+    const trailing: PackagePage[] = [];
+    for (;;) {
+      const candidate = otherPages.find((page) => page.page === nextPage);
+      if (!candidate) break;
+      trailing.push(candidate);
+      nextPage += 1;
+    }
+    if (trailing.length) { group.push(...trailing); uncertain.add(group); }
+  }
   const suggestions: SuggestedLogicalDocument[] = groups.map(group => {
     const first = group[0]; const last = group.at(-1)!;
     const confidence = Math.min(...group.map(page => page.classification.confidence));

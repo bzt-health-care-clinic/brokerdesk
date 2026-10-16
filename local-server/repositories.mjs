@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, join, relative, resolve } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { deflateRawSync } from "node:zlib";
@@ -15,6 +15,18 @@ export function compactPackageRecord(record) {
   if (!record.packagePages?.length || !record.raw || (!record.raw.text && !record.raw.rawText && !record.raw.normalizedText && !record.raw.pages?.length)) return { record, changed: false };
   const charactersExtracted = record.packagePages.reduce((total, page) => total + (page.text?.length ?? 0), 0);
   return { record: { ...record, raw: { metadata: { ...record.raw.metadata, provider: record.raw.metadata?.provider ?? "page_package_pipeline", pageLevel: true, charactersExtracted, pageCount: record.packagePages.length } } }, changed: true };
+}
+
+// Cache of file content hashes keyed by path; invalidated when mtime/size changes,
+// so listDocuments no longer re-hashes every file on every read.
+const sourceHashCache = new Map();
+function cachedSourceHash(filePath) {
+  const stat = statSync(filePath);
+  const cached = sourceHashCache.get(filePath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.hash;
+  const hash = createHash("sha256").update(readFileSync(filePath)).digest("hex");
+  sourceHashCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, hash });
+  return hash;
 }
 
 export class LocalRepositories {
@@ -51,10 +63,11 @@ export class LocalRepositories {
     for (const item of items) insert.run(safeId(item.id, "logical document id"), caseId, physicalFileId, item.documentType, item.title || item.documentType, item.startPage ?? null, item.endPage ?? item.startPage ?? null, item.subjectName ?? null, item.subjectType ?? null, item.subjectId ?? null, item.documentSubtype ?? null, item.presenceStatus || "FOUND", item.parseStatus || "NOT_EVALUATED", item.validationStatus || "NOT_EVALUATED", item.classificationSource || source, item.classificationConfidence ?? null, item.createdAt || stamp, stamp);
     return this.logicalDocuments(physicalFileId);
   }
-  listDocuments(caseId) { return this.db.prepare("SELECT id,original_filename,stored_filename,record_json FROM documents WHERE case_id=? AND deleted_at IS NULL ORDER BY uploaded_at").all(safeId(caseId)).map((row) => { const compacted = compactPackageRecord(parse(row.record_json)); const record = compacted.record; const file = this.documentPath(row.id); const currentSourceHash = file ? createHash("sha256").update(readFileSync(file.path)).digest("hex") : "MISSING";
-    // Legacy uploads are bound to an immutable document id; establish their baseline once.
-    const legacy = !record.sourceHash; if (legacy) record.sourceHash = currentSourceHash;
-    if (compacted.changed || legacy) this.db.prepare("UPDATE documents SET record_json=?,updated_at=? WHERE id=?").run(json(record), now(), row.id); let logicalDocuments = this.logicalDocuments(row.id); if (!logicalDocuments.length) logicalDocuments = this.syncLogicalDocuments(caseId, row.id, record, "MIGRATED"); return { ...record, currentSourceHash, originalFileName: row.original_filename, currentFileName: row.stored_filename, logicalDocuments }; }); }
+  listDocuments(caseId) { return this.db.prepare("SELECT id,original_filename,stored_filename,record_json FROM documents WHERE case_id=? AND deleted_at IS NULL ORDER BY uploaded_at").all(safeId(caseId)).map((row) => { const compacted = compactPackageRecord(parse(row.record_json)); const record = compacted.record; const file = this.documentPath(row.id); const currentSourceHash = file ? cachedSourceHash(file.path) : "MISSING";
+    // Legacy uploads are bound to an immutable document id; keep the baseline in memory only.
+    // (No read-time UPDATE: a read must not write, and the hash cache makes recompute cheap.)
+    if (!record.sourceHash) record.sourceHash = currentSourceHash;
+    let logicalDocuments = this.logicalDocuments(row.id); if (!logicalDocuments.length) logicalDocuments = this.syncLogicalDocuments(caseId, row.id, record, "MIGRATED"); return { ...record, currentSourceHash, originalFileName: row.original_filename, currentFileName: row.stored_filename, logicalDocuments }; }); }
   getDocument(id) { return this.db.prepare("SELECT * FROM documents WHERE id=? AND deleted_at IS NULL").get(safeId(id, "document id")); }
   saveDocument(caseId, record, bytes, originalFilename, action = "UPLOAD_DOCUMENT", replacedDocumentId = null) {
     record = { ...record, sourceHash: createHash("sha256").update(bytes).digest("hex") };
@@ -63,11 +76,20 @@ export class LocalRepositories {
     const storedFilename = `${id}-${cleanName(record.documentType).toLowerCase()}${extension}`; const absolute = resolve(folder, storedFilename); if (!inside(folder, absolute)) throw new Error("Unsafe document path");
     const temporary = resolve(this.paths.temp, `${randomUUID()}.upload`); writeFileSync(temporary, bytes); renameSync(temporary, absolute);
     const relativePath = relative(this.paths.base, absolute).replaceAll("\\", "/"); const stamp = now();
-    this.db.prepare(`INSERT INTO documents(id,case_id,original_filename,stored_filename,relative_path,mime_type,size,document_type,parse_status,validation_status,record_json,uploaded_at,updated_at,replaced_by)
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare(`INSERT INTO documents(id,case_id,original_filename,stored_filename,relative_path,mime_type,size,document_type,parse_status,validation_status,record_json,uploaded_at,updated_at,replaced_by)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)`).run(id, caseId, originalFilename, storedFilename, relativePath, record.mimeType || "application/octet-stream", bytes.length, record.documentType, record.state, record.validation?.validationStatus || "NOT_EVALUATED", json(record), stamp, stamp);
-    if (replacedDocumentId) this.db.prepare("UPDATE documents SET replaced_by=?,deleted_at=?,updated_at=? WHERE id=? AND case_id=?").run(id, stamp, stamp, safeId(replacedDocumentId), caseId);
-    const logicalDocuments = this.syncLogicalDocuments(caseId, id, record, "AUTOMATIC");
-    audit(this.db, action, { caseId, documentId: id, details: replacedDocumentId ? { replacedDocumentId } : {} }); return { ...record, originalFileName: originalFilename, currentFileName: storedFilename, logicalDocuments };
+      if (replacedDocumentId) this.db.prepare("UPDATE documents SET replaced_by=?,deleted_at=?,updated_at=? WHERE id=? AND case_id=?").run(id, stamp, stamp, safeId(replacedDocumentId), caseId);
+      this.syncLogicalDocuments(caseId, id, record, "AUTOMATIC");
+      audit(this.db, action, { caseId, documentId: id, details: replacedDocumentId ? { replacedDocumentId } : {} });
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      try { rmSync(absolute, { force: true }); } catch {}
+      throw error;
+    }
+    return { ...record, originalFileName: originalFilename, currentFileName: storedFilename, logicalDocuments: this.logicalDocuments(id) };
   }
   updateDocument(id, record) { const existing = this.getDocument(id); if (!existing) return null; const logicalDocuments = this.syncLogicalDocuments(existing.case_id, id, record, "MANUAL"); const stored = { ...record, logicalDocuments }; this.db.prepare("UPDATE documents SET document_type=?,parse_status=?,validation_status=?,record_json=?,updated_at=? WHERE id=?").run(record.documentType, record.state, record.validation?.validationStatus || "NOT_EVALUATED", json(stored), now(), id); audit(this.db, "UPDATE_DOCUMENT_SECTIONS", { caseId: existing.case_id, documentId: id }); return stored; }
   renameDocument(id, requestedFilename) {

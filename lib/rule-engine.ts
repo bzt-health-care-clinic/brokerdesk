@@ -107,9 +107,12 @@ export function checkCoInsured(data: InsuranceCase): Alert[] {
 }
 
 export function checkLessor(data: InsuranceCase): Alert[] {
-  if (!isAuto(data) || !data.ownership?.lessor || !data.vehicles[0]?.lessor) return [];
-  const ownershipLessor = data.ownership.lessor;
+  if (!isAuto(data) || !data.vehicles[0]) return [];
+  // NOTE: reconciliation writes ownership facts to the vehicle's ownership record;
+  // the top-level data.ownership is only a fallback and is usually empty.
+  const ownershipLessor = vehicleOwnership(data, 0)?.lessor;
   const applicationLessor = data.vehicles[0].lessor;
+  if (!ownershipLessor || !applicationLessor) return [];
   const mismatched = norm(ownershipLessor.name) !== norm(applicationLessor.name) || norm(ownershipLessor.address) !== norm(applicationLessor.address);
   return mismatched
     ? [alert("LESSOR_MISMATCH", "medium", "Lessor address mismatch.", "lessor", source(data, "lessor"))]
@@ -142,7 +145,13 @@ export function checkMvr(data: InsuranceCase): Alert[] {
       const licenceSource = source(data, `licence_dates:${driver.name}`);
       if (licenceSource?.status === "conflict") alerts.push(alert("LICENCE_DATE_CONFLICT", "medium", `Licence date conflict for ${driver.name}. MVR Issue Date has not overwritten G/G2/G dates.`, "licence_dates", licenceSource));
     }
-    if (driver.mvr_convictions && JSON.stringify(driver.convictions) !== JSON.stringify(driver.mvr_convictions)) {
+    // Compare convictions as an order-insensitive set of (description, conviction_date) keys:
+    // the same convictions in a different order must not raise a mismatch.
+    const convictionKey = (conviction: { description?: unknown; conviction_date?: unknown }) =>
+      `${String(conviction.description ?? "")}|${String(conviction.conviction_date ?? "")}`;
+    const convictionKeys = (convictions: Array<{ description?: unknown; conviction_date?: unknown }> | undefined) =>
+      JSON.stringify((convictions ?? []).map(convictionKey).sort());
+    if (driver.mvr_convictions && convictionKeys(driver.convictions) !== convictionKeys(driver.mvr_convictions)) {
       alerts.push(alert("MVR_CONVICTION_MISMATCH", "high", `Conviction information differs from MVR for ${driver.name}.`, "convictions", source(data, `convictions:${driver.name}`)));
     }
     return alerts;

@@ -49,7 +49,7 @@ export const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/cases") return sendJson(response, request, 201, repositories.upsertCase(await readJson(request), "CREATE_CASE"));
     const caseMatch = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)$/);
     if (caseMatch && request.method === "GET") { const item = repositories.getCase(caseMatch[1]); return item ? sendJson(response, request, 200, item) : sendJson(response, request, 404, { error: "Case not found" }); }
-    if (caseMatch && request.method === "PUT") return sendJson(response, request, 200, repositories.upsertCase(await readJson(request)));
+    if (caseMatch && request.method === "PUT") { const body = await readJson(request); if (body?.case?.case_id !== caseMatch[1]) return sendJson(response, request, 400, { error: "Case id in URL does not match case id in request body" }); return sendJson(response, request, 200, repositories.upsertCase(body)); }
     if (caseMatch && request.method === "PATCH") { const body = await readJson(request); if (body.action === "archive") { repositories.archiveCase(caseMatch[1]); return sendJson(response, request, 200, { ok: true }); } if (body.action === "rename") return sendJson(response, request, 200, repositories.renameCase(caseMatch[1], body.label)); }
     if (caseMatch && request.method === "DELETE") { repositories.deleteCase(caseMatch[1]); return sendJson(response, request, 200, { ok: true }); }
     const caseDocuments = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/documents$/);
