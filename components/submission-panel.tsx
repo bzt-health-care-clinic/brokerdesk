@@ -7,7 +7,7 @@ import type { UploadedDocumentRecord } from "@/lib/extraction-types";
 import type { IntakeResult } from "@/lib/intake-profile";
 import { primaryTransactionType } from "@/lib/intake-profile";
 import { isPolicyChange } from "@/lib/policy-change";
-import { pilotAuthorize, pilotDownload, pilotPreflight } from "@/lib/pilot-client";
+import { pilotAuthorize, pilotCompareInsuredNames, pilotDownload, pilotPreflight } from "@/lib/pilot-client";
 
 type Props = {
   data: InsuranceCase;
@@ -23,6 +23,13 @@ export function SubmissionPanel({data,records,saveState,onCaseSaved,onNavigate}:
   const [message,setMessage] = useState("");
   const [busy,setBusy] = useState(false);
   const [evidenceChoice,setEvidenceChoice] = useState("");
+  const [applicationChoice,setApplicationChoice] = useState("");
+  const [quoteChoice,setQuoteChoice] = useState("");
+  const [applicationNames,setApplicationNames] = useState("");
+  const [quoteNames,setQuoteNames] = useState("");
+  const [signerEvidence,setSignerEvidence] = useState<Record<string,string>>({});
+  const [signaturePages,setSignaturePages] = useState<Record<string,string>>({});
+  const [signerConfirmed,setSignerConfirmed] = useState<Record<string,boolean>>({});
   useEffect(() => {setPreflight(null);setMessage("");},[data,records]);
   const change = isPolicyChange(data);
   const transaction = primaryTransactionType(data);
@@ -44,6 +51,34 @@ export function SubmissionPanel({data,records,saveState,onCaseSaved,onNavigate}:
           label:`${r.fileName} — ${s.documentType}${s.startPage?` p.${s.startPage}–${s.endPage??s.startPage}`:""}`}))
     );
   },[records,transaction]);
+  const newBusinessOptions=useMemo(()=>{
+    const accepted=data.case_type==="new_auto"?["AUTO_APPLICATION","AUTO_QUOTE"]:["HAB_APPLICATION","HAB_QUOTE"];
+    return records.filter(r=>r.sourceHash&&!r.staleExtraction&&
+      (!r.currentSourceHash||r.currentSourceHash===r.sourceHash)).flatMap(r=>
+      (r.logicalDocuments===undefined?[{id:undefined,documentType:r.documentType,presenceStatus:"FOUND" as const,startPage:1,endPage:r.pageCount}]:r.logicalDocuments)
+        .filter(sec=>sec.presenceStatus==="FOUND"&&accepted.includes(sec.documentType)&&!(r.withdrawnSectionRanges??[]).some(w=>(sec.startPage??1)<=w.endPage&&(sec.endPage??sec.startPage??1)>=w.startPage))
+        .map(sec=>({id:r.id+"::"+(sec.id??""),documentId:r.id,logicalId:sec.id,type:sec.documentType,
+          label:r.fileName+" — "+sec.documentType+" p."+(sec.startPage??1)+"–"+(sec.endPage??sec.startPage??1)})));
+  },[data.case_type,records]);
+  const applicationDocs=newBusinessOptions.filter(o=>o.type.endsWith("_APPLICATION"));
+  const quoteDocs=newBusinessOptions.filter(o=>o.type.endsWith("_QUOTE"));
+  const policyholders=[data.insured.name,...(data.insured.co_insured??[]).map(person=>person.name)].filter(Boolean);
+  const mustConfirmSigners=change&&(policyholders.length>1||transaction==="CANCELLATION");
+  const parseNames=(text:string)=>text.split(/\r?\n/).map(value=>value.trim()).filter(Boolean);
+  async function confirmNames(verified:boolean){
+    const application=applicationDocs.find(o=>o.id===applicationChoice)??applicationDocs.find(o=>o.documentId===data.signed_document_id&&o.logicalId===data.signed_logical_document_id);
+    const quote=quoteDocs.find(o=>o.id===quoteChoice)??quoteDocs[0];
+    if(verified&&(!application||!quote||!applicationNames.trim()||!quoteNames.trim())){setMessage("Select the signed Application and Quote and enter each document's named insureds, one per line.");return;}
+    if(verified&&!window.confirm("Have you visually checked ALL named insured names in both active documents, including joint applicants?"))return;
+    setBusy(true);
+    try{
+      const next=await pilotCompareInsuredNames(data.case_id,{verified,applicationDocumentId:application?.documentId,
+        applicationLogicalDocumentId:application?.logicalId,quoteDocumentId:quote?.documentId,
+        quoteLogicalDocumentId:quote?.logicalId,applicationNames:parseNames(applicationNames),quoteNames:parseNames(quoteNames)});
+      onCaseSaved(next);setMessage(verified?"Document-linked insured names recorded. Run preflight to check matches.":"Insured-name comparison revoked.");
+    }catch(e){setMessage(e instanceof Error?e.message:"Could not confirm document names.");}
+    finally{setBusy(false);}
+  }
   async function runPreflight() {
     if(saveState!=="saved"){setMessage("Wait until the current Case is saved, then run Preflight.");return;}
     setBusy(true);setMessage("");
@@ -66,7 +101,15 @@ export function SubmissionPanel({data,records,saveState,onCaseSaved,onNavigate}:
     if(verified&&!window.confirm("Have you opened the source and visually verified the client's authorization for this exact policy change?"))
       return;
     setBusy(true);
-    try { const next=await pilotAuthorize(data.case_id,{verified,documentId:selected?.documentId,logicalDocumentId:selected?.logicalId});
+    const signers=verified&&mustConfirmSigners?policyholders.map(name=>{
+      const selectedSigner=options.find(o=>o.id===signerEvidence[name])??selected;
+      return {name,documentId:selectedSigner?.documentId??"",logicalDocumentId:selectedSigner?.logicalId,
+        signaturePage:Number(signaturePages[name]),verified:signerConfirmed[name]===true};
+    }):undefined;
+    if(verified&&mustConfirmSigners&&(!signers?.length||signers.some(s=>!s.verified||!Number.isInteger(s.signaturePage)||s.signaturePage<1))){
+      setMessage("Confirm each policyholder's actual signature and enter the exact document page for each signer.");return;
+    }
+    try { const next=await pilotAuthorize(data.case_id,{verified,documentId:selected?.documentId,logicalDocumentId:selected?.logicalId,signers});
       onCaseSaved(next);setMessage(verified?"Change authorization recorded with the original evidence hash.":"Change authorization revoked.");
     } catch(e){setMessage(e instanceof Error?e.message:"Could not verify change authorization.");}
     finally{setBusy(false);}
@@ -76,6 +119,25 @@ export function SubmissionPanel({data,records,saveState,onCaseSaved,onNavigate}:
       <strong>Broker submission · Pilot</strong>
       <small>Intake profile v1 · Manual email attachment</small>
     </div>
+    {!change && <div className="pilot-auth-control">
+      <p><strong>Signed Application vs Quote — named policyholders</strong></p>
+      {data.named_insured_comparison ?
+        <><p>Compared at {data.named_insured_comparison.confirmed_at}. Application: {data.named_insured_comparison.application_names.join(", ")}. Quote: {data.named_insured_comparison.quote_names.join(", ")}.</p>
+          <Button variant="outline" size="sm" disabled={busy} onClick={()=>void confirmNames(false)}>Revoke name comparison</Button></> :
+        <><p>Open both original documents and enter each named policyholder on a separate line. Do not infer names from the Case summary.</p>
+          <label>Signed Application
+            <select aria-label="Document for signed insured-name comparison" value={applicationChoice||applicationDocs.find(o=>o.documentId===data.signed_document_id&&o.logicalId===data.signed_logical_document_id)?.id||""} onChange={e=>setApplicationChoice(e.target.value)}>
+              <option value="">Choose signed application</option>{applicationDocs.map(o=><option value={o.id} key={o.id}>{o.label}</option>)}
+            </select></label>
+          <label>Quote
+            <select aria-label="Quote for insured-name comparison" value={quoteChoice||quoteDocs[0]?.id||""} onChange={e=>setQuoteChoice(e.target.value)}>
+              <option value="">Choose quote</option>{quoteDocs.map(o=><option value={o.id} key={o.id}>{o.label}</option>)}
+            </select></label>
+          <label>Names on signed Application — one per line<textarea aria-label="Named insureds on signed application" value={applicationNames} onChange={e=>setApplicationNames(e.target.value)}/></label>
+          <label>Names on Quote — one per line<textarea aria-label="Named insureds on quote" value={quoteNames} onChange={e=>setQuoteNames(e.target.value)}/></label>
+          <Button variant="outline" size="sm" disabled={busy||!data.signed||!applicationDocs.length||!quoteDocs.length}
+            onClick={()=>void confirmNames(true)}>Record manual name comparison</Button></>}
+    </div>}
     {change && <div className="pilot-auth-control">
       <p><strong>Policy Change authorization</strong> (separate from a New Business Signed Application)</p>
       {data.transaction_authorization?.verified ?
@@ -91,6 +153,23 @@ export function SubmissionPanel({data,records,saveState,onCaseSaved,onNavigate}:
             (process.env.NEXT_PUBLIC_BROKERDESK_LOCAL_API_URL??"http://127.0.0.1:47831")+
               "/documents/"+encodeURIComponent((options.find(o=>o.id===evidenceChoice)??options[0]).documentId)+"/file"
           }>Open source before confirming</a>}
+          {mustConfirmSigners&&<div className="pilot-signer-evidence">
+            <p>Each distinct policyholder must sign. Open the original source and manually verify the actual signature on the indicated page.</p>
+            {policyholders.map(name=><div key={name}>
+              <strong>{name}</strong>
+              <label>Signed document section
+                <select aria-label={"Signature evidence for "+name} value={signerEvidence[name]||evidenceChoice||options[0]?.id||""}
+                  onChange={e=>setSignerEvidence(previous=>({...previous,[name]:e.target.value}))}>
+                  {options.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}
+                </select>
+              </label>
+              <label>Signature page <input aria-label={"Signature page for "+name} type="number" min="1"
+                value={signaturePages[name]??""} onChange={e=>setSignaturePages(previous=>({...previous,[name]:e.target.value}))}/></label>
+              <label><input type="checkbox" checked={signerConfirmed[name]===true}
+                onChange={e=>setSignerConfirmed(previous=>({...previous,[name]:e.target.checked}))}/>
+                I visually verified {name}'s distinct signature on that page.</label>
+            </div>)}
+          </div>}
           <Button variant="outline" size="sm" disabled={busy||!options.length} onClick={()=>void confirmAuthorization(true)}>Verify authorization</Button></>}
     </div>}
     <div className="pilot-preflight-control">

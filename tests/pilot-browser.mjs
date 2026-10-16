@@ -70,6 +70,10 @@ try {
     ...repo.getCase(home.case_id),signed_document_id:"UISIGNED",
     signed_logical_document_id:"UISIGNEDSEC"
   },"SIGNED_VERIFIED");
+  repo.saveNamedInsuredComparison(home.case_id,{verified:true,
+    applicationDocumentId:"UISIGNED",applicationLogicalDocumentId:"UISIGNEDSEC",
+    quoteDocumentId:"UIQUOTE",quoteLogicalDocumentId:"UIQUOTESEC",
+    applicationNames:["SYNTHETIC PILOT CLIENT"],quoteNames:["SYNTHETIC PILOT CLIENT"]});
   const bundle=pilot.exportCase(home.case_id,{id:"PILOT-BROKER-1",name:"Pilot Broker One"});
 
   const { chromium }=await import("playwright");

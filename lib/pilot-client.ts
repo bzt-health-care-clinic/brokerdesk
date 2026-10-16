@@ -34,8 +34,19 @@ export async function pilotDownload(id: string, broker: BrokerIdentity): Promise
   } finally { window.setTimeout(() => URL.revokeObjectURL(url), 2000); }
   return filename;
 }
+export async function pilotCompareInsuredNames(id:string,request:{
+  verified:boolean;applicationDocumentId?:string;applicationLogicalDocumentId?:string;
+  quoteDocumentId?:string;quoteLogicalDocumentId?:string;
+  applicationNames?:string[];quoteNames?:string[];
+}):Promise<InsuranceCase>{
+  const response=await checked(await fetch(API+"/cases/"+encodeURIComponent(id)+"/insured-name-comparison",{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(request)}));
+  return response.json();
+}
 export async function pilotAuthorize(id: string,
-  request: {verified: boolean; documentId?: string; logicalDocumentId?: string}): Promise<InsuranceCase> {
+  request: {verified: boolean; documentId?: string; logicalDocumentId?: string; signers?: Array<{
+    name:string;documentId:string;logicalDocumentId?:string;signaturePage:number;verified:boolean;
+  }>): Promise<InsuranceCase> {
   const response = await checked(await fetch(`${API}/cases/${encodeURIComponent(id)}/change-authorization`,{
     method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(request)}));
   return response.json();

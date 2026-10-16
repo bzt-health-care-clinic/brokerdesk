@@ -100,6 +100,7 @@ export class SubmissionPilotService {
       signed: { verified: Boolean(item.signed), verified_at: item.signed_verified_at ?? null,
         document_id: item.signed_document_id ?? null, logical_document_id: item.signed_logical_document_id ?? null },
       transaction_authorization: item.transaction_authorization ?? null,
+      named_insured_comparison: item.named_insured_comparison ?? null,
     };
     const archive = createBdzip([...payloads, { path: "manifest.json", bytes: json(manifest) }]);
     this.db.prepare("INSERT INTO outbound_submissions(package_id,case_id,revision,sha256,filename,created_at) VALUES(?,?,?,?,?,?)")
@@ -143,6 +144,7 @@ export class SubmissionPilotService {
       throw bad("Manifest signed state does not match the Case.");
     if (JSON.stringify(manifest.transaction_authorization ?? null) !== JSON.stringify(item.transaction_authorization ?? null))
       throw bad("Manifest authorization does not match the Case.");
+    if(JSON.stringify(manifest.named_insured_comparison??null)!==JSON.stringify(item.named_insured_comparison??null))throw bad("Manifest insured names do not match the Case.");
     const listed = new Set(); const byDoc = new Map();
     for (const file of manifest.files) {
       const path = String(file?.path ?? "");
@@ -225,6 +227,7 @@ export class SubmissionPilotService {
       if (loaded.signed && !this.repo.signedEvidenceStillValid(loaded)) throw bad("Imported signed application evidence could not be verified.");
       if (loaded.transaction_authorization && !this.repo.transactionAuthorizationStillValid(loaded))
         throw bad("Imported transaction authorization evidence could not be verified.");
+      if(loaded.named_insured_comparison&&!this.repo.namedInsuredComparisonStillValid(loaded))throw bad("Imported insured-name comparison evidence could not be verified.");
       renameSync(staging, target);
       archiveStored = true;
       this.db.exec("BEGIN IMMEDIATE");

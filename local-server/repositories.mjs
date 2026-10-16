@@ -7,6 +7,11 @@ import { inside, safeId, safeRelativePath } from "./paths.mjs";
 
 const now = () => new Date().toISOString();
 const authorizationKey = "transaction_authorization";
+const namesKey = "named_insured_comparison";
+const normPerson = name => typeof name === "string" ? name.normalize("NFKC").replace(/\s+/g," ").trim().toUpperCase() : "";
+const people = item => [item.insured?.name,...(item.insured?.co_insured??[]).map(p=>p.name)].map(normPerson);
+const matchPeople = (a,b) => Array.isArray(a)&&Array.isArray(b)&&a.length>0&&a.length===b.length&&a.every(Boolean)&&b.every(Boolean)&&new Set(a).size===a.length&&new Set(b).size===b.length&&[...a].sort().every((v,i)=>v===[...b].sort()[i]);
+const transactionTypes = item => {const names=item.policy_change?.transaction_types??[];const action=String(item.policy_change?.requested_action??"");return {cancel:names.includes("CANCELLATION")||/cancell?/i.test(action),name:names.includes("NAME_CHANGE")||/name.change/i.test(action),payment:names.includes("PAYMENT_CHANGE")||/payment.change/i.test(action)}};
 const signatureKeys = [
   "signed", "signed_verified_at", "signed_document_id", "signed_logical_document_id",
   "signed_evidence_document_type", "signed_evidence_start_page", "signed_evidence_end_page",
@@ -66,6 +71,12 @@ export class LocalRepositories {
           item = clearSignature(item);
           audit(this.db, "SIGNED_EVIDENCE_INVALID", { caseId: id, details: { reason: "invalid-on-save" } });
         }
+        if (stored[namesKey] === undefined) delete item[namesKey];
+        else item[namesKey] = stored[namesKey];
+        if (item[namesKey] && !this.namedInsuredComparisonStillValid(item)) {
+          delete item[namesKey];
+          audit(this.db,"INSURED_NAMES_EVIDENCE_INVALID",{caseId:id});
+        }
         // Authorization is server-owned: JSON import/autosave cannot fabricate it.
         if (stored[authorizationKey] === undefined) delete item[authorizationKey];
         else item[authorizationKey] = stored[authorizationKey];
@@ -77,6 +88,7 @@ export class LocalRepositories {
       } else {
         item = clearSignature(item);
         delete item[authorizationKey];
+        delete item[namesKey];
       }
       if ((item.case_type === "new_auto" || item.case_type === "new_home") && item.status === "keyed" && !item.signed) {
         throw signatureError("Signed application verification is required before marking this case KEYED.");
@@ -152,6 +164,55 @@ export class LocalRepositories {
     )) return false;
     return true;
   }
+  evidenceReference(item, documentId, logicalDocumentId, allowed) {
+    if (!documentId) return null;
+    const row=this.getDocument(documentId);
+    if (!row || row.case_id!==item.case_id) return null;
+    const file=this.documentPath(documentId);
+    if (!file) return null;
+    const record=parse(row.record_json);
+    const checksum=createHash("sha256").update(readFileSync(file.path)).digest("hex");
+    if (!record.sourceHash || record.staleExtraction || record.sourceHash!==checksum) return null;
+    const sections=this.logicalDocuments(documentId);
+    if (logicalDocumentId) {
+      const sec=sections.find(x=>x.id===logicalDocumentId&&x.presenceStatus==="FOUND"&&allowed.includes(x.documentType));
+      if (!sec || (record.withdrawnSectionRanges??[]).some(r=>(sec.startPage??1)<=r.endPage&&(sec.endPage??sec.startPage??1)>=r.startPage)) return null;
+      return {documentId,logicalDocumentId,type:sec.documentType,hash:checksum,startPage:sec.startPage,endPage:sec.endPage};
+    }
+    if (sections.length || !allowed.includes(record.documentType) || record.withdrawnSectionRanges?.length) return null;
+    return {documentId,type:record.documentType,hash:checksum};
+  }
+  namedInsuredComparisonStillValid(item) {
+    const data=item.named_insured_comparison;
+    if (!data || !data.confirmed_at || !data.confirmed_by || !item.signed || !this.signedEvidenceStillValid(item)) return false;
+    const app=this.evidenceReference(item,data.application?.document_id,data.application?.logical_document_id,[item.case_type==="new_auto"?"AUTO_APPLICATION":"HAB_APPLICATION"]);
+    const quote=this.evidenceReference(item,data.quote?.document_id,data.quote?.logical_document_id,[item.case_type==="new_auto"?"AUTO_QUOTE":"HAB_QUOTE"]);
+    const matched=(saved,live)=>Boolean(saved&&live&&saved.source_sha256===live.hash&&saved.document_type===live.type&&saved.start_page===live.startPage&&saved.end_page===live.endPage&&saved.logical_document_id===live.logicalDocumentId);
+    const a=(data.application_names??[]).map(normPerson),b=(data.quote_names??[]).map(normPerson);
+    return matched(data.application,app)&&matched(data.quote,quote)&&app.documentId===item.signed_document_id&&app.logicalDocumentId===item.signed_logical_document_id&&matchPeople(a,a)&&matchPeople(b,b);
+  }
+  saveNamedInsuredComparison(caseId,request,actor="Local Broker") {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const item=this.getCase(safeId(caseId));if(!item)throw signatureError("Case not found.",404);
+      if (!["new_auto","new_home"].includes(item.case_type))throw signatureError("New Business only.",400);
+      const next={...item};
+      if(request.verified===false) delete next.named_insured_comparison;
+      else {
+        if(!item.signed||!this.signedEvidenceStillValid(item))throw signatureError("Verify signed application first.");
+        const app=this.evidenceReference(item,request.applicationDocumentId,request.applicationLogicalDocumentId,[item.case_type==="new_auto"?"AUTO_APPLICATION":"HAB_APPLICATION"]);
+        const quote=this.evidenceReference(item,request.quoteDocumentId,request.quoteLogicalDocumentId,[item.case_type==="new_auto"?"AUTO_QUOTE":"HAB_QUOTE"]);
+        if(!app||!quote||app.documentId!==item.signed_document_id||app.logicalDocumentId!==item.signed_logical_document_id)throw signatureError("Choose the verified Application and an active Quote.");
+        const a=request.applicationNames,b=request.quoteNames;
+        if(!Array.isArray(a)||!Array.isArray(b)||!matchPeople(a.map(normPerson),a.map(normPerson))||!matchPeople(b.map(normPerson),b.map(normPerson))||a.length>8||b.length>8)throw signatureError("Provide unique document-specific named insured names.",400);
+        const binding=x=>({document_id:x.documentId,logical_document_id:x.logicalDocumentId,document_type:x.type,source_sha256:x.hash,start_page:x.startPage,end_page:x.endPage});
+        next.named_insured_comparison={application:binding(app),quote:binding(quote),application_names:a.map(x=>x.trim()),quote_names:b.map(x=>x.trim()),confirmed_at:now(),confirmed_by:actor};
+      }
+      this.upsertCase({case:next},"UPDATE_CASE",{trustedSignature:true});
+      audit(this.db,request.verified===false?"INSURED_NAMES_REVOKED":"INSURED_NAMES_COMPARED",{caseId,details:{actor}});
+      this.db.exec("COMMIT");return this.getCase(caseId);
+    }catch(e){this.db.exec("ROLLBACK");throw e}
+  }
   transactionAuthorizationReference(item, documentId, logicalDocumentId) {
     if (!["auto_policy_change", "home_policy_change"].includes(item.case_type)) return null;
     if (!documentId) return null;
@@ -162,10 +223,10 @@ export class LocalRepositories {
     const record = parse(row.record_json);
     const fingerprint = createHash("sha256").update(readFileSync(file.path)).digest("hex");
     if (!record.sourceHash || record.sourceHash !== fingerprint || record.staleExtraction) return null;
-    const types = item.policy_change?.transaction_types ?? [];
-    const allowed = types.includes("CANCELLATION") ? ["CANCELLATION_REQUEST"] :
-      types.includes("NAME_CHANGE") ? ["POLICY_CHANGE", "OPCF_FORM"] :
-      types.includes("PAYMENT_CHANGE") ? ["PAYMENT_AUTHORIZATION", "POLICY_CHANGE"] :
+    const types = transactionTypes(item);
+    const allowed = types.cancel ? ["CANCELLATION_REQUEST"] :
+      types.name ? ["POLICY_CHANGE", "OPCF_FORM"] :
+      types.payment ? ["PAYMENT_AUTHORIZATION", "POLICY_CHANGE"] :
       ["POLICY_CHANGE", "OPCF_FORM"];
     const sections = this.logicalDocuments(row.id);
     if (logicalDocumentId) {
@@ -186,8 +247,14 @@ export class LocalRepositories {
     const auth = item.transaction_authorization;
     if (!auth?.verified) return false;
     const ref = this.transactionAuthorizationReference(item, auth.document_id, auth.logical_document_id);
-    return Boolean(ref && ref.hash === auth.source_sha256 && ref.type === auth.document_type &&
-      (auth.logical_document_id === undefined || (ref.startPage === auth.start_page && ref.endPage === auth.end_page)));
+    if(!ref||ref.hash!==auth.source_sha256||ref.type!==auth.document_type||(auth.logical_document_id!==undefined&&(ref.startPage!==auth.start_page||ref.endPage!==auth.end_page)))return false;
+    const types=transactionTypes(item),required=people(item).length>1||types.cancel,expected=people(item);
+    if(types.cancel&&(auth.authorization_type!=="CANCELLATION_REQUEST"||auth.document_type!=="CANCELLATION_REQUEST"))return false;
+    if(!required&&!auth.signers?.length)return true;
+    if(!expected.length||expected.some(x=>!x)||new Set(expected).size!==expected.length||!Array.isArray(auth.signers)||!matchPeople(auth.signers.map(s=>normPerson(s.name)),expected))return false;
+    const allowed=types.cancel?["CANCELLATION_REQUEST"]:types.name?["POLICY_CHANGE","OPCF_FORM"]:types.payment?["PAYMENT_AUTHORIZATION","POLICY_CHANGE"]:["POLICY_CHANGE","OPCF_FORM"];
+    return auth.signers.every(s=>{const v=this.evidenceReference(item,s.document_id,s.logical_document_id,allowed);return Boolean(s.verified_at&&s.verified_by&&v&&v.logicalDocumentId&&v.hash===s.source_sha256&&v.type===s.document_type&&v.startPage===s.start_page&&v.endPage===s.end_page&&Number.isInteger(s.signature_page)&&Number.isInteger(v.startPage)&&Number.isInteger(v.endPage)&&s.signature_page>=v.startPage&&s.signature_page<=v.endPage)});
+
   }
   saveTransactionAuthorization(caseId, requested, actor = "Local Broker") {
     this.db.exec("BEGIN IMMEDIATE");
@@ -199,13 +266,20 @@ export class LocalRepositories {
       if (requested.verified) {
         const ref = this.transactionAuthorizationReference(item, requested.documentId, requested.logicalDocumentId);
         if (!ref) throw signatureError("Signed change authorization source is missing, mismatched, stale or withdrawn.");
-        const intent = item.policy_change?.transaction_types ?? [];
-        next.transaction_authorization = {
-          verified: true, authorization_type: intent.includes("CANCELLATION") ? "CANCELLATION_REQUEST" :
-            intent.includes("NAME_CHANGE") ? "NAME_CHANGE_REQUEST" : "SIGNED_CHANGE_FORM",
-          document_id: ref.documentId, logical_document_id: ref.logicalDocumentId,
-          document_type: ref.type, source_sha256: ref.hash, verified_at: now(), verified_by: actor,
-          start_page: ref.startPage, end_page: ref.endPage,
+        const types=transactionTypes(item),expected=people(item),required=expected.length>1||types.cancel;
+        const incoming=requested.signers;
+        if(incoming!==undefined&&!Array.isArray(incoming))throw signatureError("Signer list must be an array.",400);
+        if(required&&(!Array.isArray(incoming)||!matchPeople(incoming.map(s=>normPerson(s.name)),expected)))throw signatureError("Each named policyholder must have a distinct verified signature.",409);
+        const allowed=types.cancel?["CANCELLATION_REQUEST"]:types.name?["POLICY_CHANGE","OPCF_FORM"]:types.payment?["PAYMENT_AUTHORIZATION","POLICY_CHANGE"]:["POLICY_CHANGE","OPCF_FORM"];
+        const signers=(incoming??[]).map(s=>{
+          const live=this.evidenceReference(item,s.documentId,s.logicalDocumentId,allowed);
+          if(s.verified!==true||!expected.includes(normPerson(s.name))||!live?.logicalDocumentId||!Number.isInteger(s.signaturePage)||!Number.isInteger(live.startPage)||!Number.isInteger(live.endPage)||s.signaturePage<live.startPage||s.signaturePage>live.endPage)throw signatureError("Signatures need manual confirmation, correct name, active document section and valid page.",409);
+          return {name:s.name.trim(),document_id:live.documentId,logical_document_id:live.logicalDocumentId,document_type:live.type,source_sha256:live.hash,start_page:live.startPage,end_page:live.endPage,signature_page:s.signaturePage,verified_at:now(),verified_by:actor};
+        });
+        if(signers.length&&!matchPeople(signers.map(s=>normPerson(s.name)),expected))throw signatureError("Signer list does not match policyholders.",409);
+        next.transaction_authorization={
+          verified:true,authorization_type:types.cancel?"CANCELLATION_REQUEST":types.name?"NAME_CHANGE_REQUEST":"SIGNED_CHANGE_FORM",
+          document_id:ref.documentId,logical_document_id:ref.logicalDocumentId,document_type:ref.type,source_sha256:ref.hash,verified_at:now(),verified_by:actor,start_page:ref.startPage,end_page:ref.endPage,...(signers.length?{signers}:{})
         };
       } else {
         delete next.transaction_authorization;
@@ -236,6 +310,7 @@ export class LocalRepositories {
       revokedAuthorization = true;
       item = this.getCase(caseId); // do not re-save a withdrawn authorization
     }
+    if(item?.named_insured_comparison&&!this.namedInsuredComparisonStillValid(item)){const next={...item};delete next.named_insured_comparison;this.upsertCase({case:next},"UPDATE_CASE",{trustedSignature:true});audit(this.db,"INSURED_NAMES_EVIDENCE_WITHDRAWN",{caseId,details:{reason}});item=this.getCase(caseId)}
     if (!item?.signed || this.signedEvidenceStillValid(item)) return revokedAuthorization;
     const cleared = clearSignature(item);
     this.upsertCase({ case: cleared }, "UPDATE_CASE", { trustedSignature: true });
@@ -278,6 +353,7 @@ export class LocalRepositories {
         details = { ...details, documentId: ref.documentId, logicalDocumentId: ref.logicalDocumentId ?? null, verifiedAt: next.signed_verified_at };
       } else {
         next = clearSignature(next);
+        delete next.named_insured_comparison;
         details = { ...details, documentId: existing.signed_document_id ?? null, logicalDocumentId: existing.signed_logical_document_id ?? null,
           statusChanged: existing.status === "keyed" ? "keyed->incomplete" : null };
       }

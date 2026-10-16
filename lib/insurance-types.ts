@@ -539,6 +539,8 @@ export interface InsuranceCase {
   policy_change?: PolicyChange;
   /** Manual evidence-bound authorization; separate from new-business signed application. */
   transaction_authorization?: import("./intake-profile.ts").ChangeAuthorization;
+  /** Manual comparison, bound to the exact signed application and Quote evidence. */
+  named_insured_comparison?: import("./intake-person-evidence.ts").InsuredNameComparison;
   field_sources: FieldSource[];
   documents: CaseDocument[];
   alerts: Alert[];

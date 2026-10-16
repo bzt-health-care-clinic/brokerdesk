@@ -6,9 +6,11 @@ import { reviewUploadedDocuments } from "./document-underwriting.ts";
 import { applyDocumentPresence } from "./document-package.ts";
 import { isSignedEvidenceStillValid } from "./signed-verification.ts";
 import { isPolicyChange, normalizePolicyChangeTransactions } from "./policy-change.ts";
+import { changeSignersValid, insuredPersonNames, isCancellationChange, nameComparisonEvidenceValid, requiresSeparateSigners, sameNamedPersons } from "./intake-person-evidence.ts";
+import type { ChangeSignerAttestation } from "./intake-person-evidence.ts";
 
-export const INTAKE_PROFILE_VERSION = { "new-business": "new-business-v1", "policy-change": "policy-change-v1" } as const;
-export const INTAKE_RULE_ENGINE_VERSION = "brokerdesk-rules-20261016";
+export const INTAKE_PROFILE_VERSION = { "new-business": "new-business-v1.1", "policy-change": "policy-change-v1.1" } as const;
+export const INTAKE_RULE_ENGINE_VERSION = "brokerdesk-rules-20261016-names-signers";
 export type IntakeSystem = "new-business" | "policy-change";
 export interface IntakeFinding { code: string; message: string; field?: string; document_id?: string; vehicle_id?: string }
 export interface IntakeResult {
@@ -30,6 +32,7 @@ export interface ChangeAuthorization {
   verified_by: string;
   start_page?: number;
   end_page?: number;
+  signers?: ChangeSignerAttestation[];
 }
 export interface IntakeInsuranceCase extends InsuranceCase {
   transaction_authorization?: ChangeAuthorization;
@@ -63,6 +66,10 @@ function validVehicleOwnership(vehicle: Vehicle, index: number, item: InsuranceC
 export function authorizationEvidenceValid(item: IntakeInsuranceCase, records: UploadedDocumentRecord[]) {
   const auth = item.transaction_authorization;
   if (!auth?.verified || !auth.document_id || !auth.source_sha256 || !auth.verified_at) return false;
+  if (isCancellationChange(item) && (auth.authorization_type !== "CANCELLATION_REQUEST" ||
+    auth.document_type !== "CANCELLATION_REQUEST")) return false;
+  if (requiresSeparateSigners(item) && !changeSignersValid(item, records)) return false;
+  if (!requiresSeparateSigners(item) && auth.signers?.length && !changeSignersValid(item, records)) return false;
   const record = records.find(r => r.id === auth.document_id);
   if (!record || !digestPresent(record) || auth.source_sha256 !== record.sourceHash) return false;
   return activeSections(record).some(section =>
@@ -90,7 +97,9 @@ export function evaluateIntakeProfile(
     findings.push({ code, message, ...(field ? {field} : {}), ...(vehicle_id ? {vehicle_id} : {}), ...(document_id ? {document_id} : {}) });
   const item = applyDocumentPresence(original, records);
   const ruleAlerts = [...runRules(item, DEFAULT_RULE_CONFIG), ...runPhase3Rules(item), ...reviewUploadedDocuments(item, records).alerts];
-  for (const a of ruleAlerts) if (!a.resolved && a.severity === "high") push(a.code, a.message, a.field);
+  // MVR received date is explicitly excluded from intake; all other HIGH rules remain.
+  for (const a of ruleAlerts) if (!a.resolved && a.severity === "high" &&
+    a.code !== "MVR_RECEIVED_DATE_MISSING") push(a.code, a.message, a.field);
 
   // Document presence is derived from current ACTIVE evidence, not a checklist
   // boolean supplied by the broker or package author.
@@ -104,6 +113,16 @@ export function evaluateIntakeProfile(
     if (!item.signed || !item.signed_verified_at || !signedRecord || !digestPresent(signedRecord) ||
       !isSignedEvidenceStillValid(records, item).valid)
       push("INTAKE_SIGNED_APPLICATION", "Signed application must be manually verified against an active, unchanged source PDF.", "signed", undefined, item.signed_document_id);
+    // Compare both original documents and the Case identities; checklist flags cannot satisfy this.
+    if (!nameComparisonEvidenceValid(item, records))
+      push("INTAKE_INSURED_NAME_EVIDENCE", "Manually compare all named insureds on the signed application and Quote, linking both active source documents.", "named_insured_comparison");
+    else {
+      const review = item.named_insured_comparison!;
+      if (!sameNamedPersons(review.application_names,review.quote_names) ||
+        !sameNamedPersons(review.application_names,insuredPersonNames(item)))
+        push("INTAKE_INSURED_NAME_MISMATCH",
+          "Signed Application, Quote and Case policyholders differ in identity or count.", "named_insured_comparison");
+    }
     if (item.case_type === "new_auto") {
       if (!item.vehicles.length) push("INTAKE_VEHICLE_REQUIRED", "Auto new business requires at least one rated vehicle.", "vehicles");
       for (const [index, vehicle] of item.vehicles.entries())
@@ -116,6 +135,11 @@ export function evaluateIntakeProfile(
     if (!authorizationEvidenceValid(item, records))
       push("INTAKE_CHANGE_AUTHORIZATION", "Verify a signed customer authorization source for this policy change.", "transaction_authorization",
         undefined, item.transaction_authorization?.document_id);
+    if (!insuredPersonNames(item).length)
+      push("INTAKE_POLICYHOLDER_IDENTITY", "Confirm each distinct named policyholder before authorizing this transaction.", "insured");
+    if (requiresSeparateSigners(item) && !changeSignersValid(item, records))
+      push("INTAKE_POLICYHOLDER_SIGNATURES",
+        "Cancellation or joint-name change requires distinct, manually verified policyholder signatures linked to active file sections and pages.", "transaction_authorization.signers");
     const types = item.policy_change ? normalizePolicyChangeTransactions(
       item.policy_change.requested_action, item.policy_change.transaction_types) : [];
     const changes = item.policy_change?.requested_changes ?? [];

@@ -91,6 +91,15 @@ try {
     ...pending,signed_document_id:"HABSIGNED",signed_logical_document_id:"HABSIGNEDS"
   },"SIGNED_VERIFIED");
   assert.equal(signed.signed,true);
+  const comparison={verified:true,applicationDocumentId:"HABSIGNED",applicationLogicalDocumentId:"HABSIGNEDS",
+    quoteDocumentId:"HABQUOTE",quoteLogicalDocumentId:"HABQUOTES",
+    applicationNames:["SYNTHETIC HOME PERSON"],quoteNames:["SYNTHETIC HOME PERSON"]};
+  assert(evaluateIntakeProfile(repo.getCase(home.case_id),repo.listDocuments(home.case_id)).blockers.some(b=>b.code==="INTAKE_INSURED_NAME_EVIDENCE"));
+  repo.saveNamedInsuredComparison(home.case_id,{...comparison,quoteNames:["SYNTHETIC HOME PERSON","SYNTHETIC SECOND PERSON"]});
+  assert(evaluateIntakeProfile(repo.getCase(home.case_id),repo.listDocuments(home.case_id)).blockers.some(b=>b.code==="INTAKE_INSURED_NAME_MISMATCH"));
+  repo.saveNamedInsuredComparison(home.case_id,comparison);
+  assert(!evaluateIntakeProfile(repo.getCase(home.case_id),repo.listDocuments(home.case_id)).blockers.some(b=>b.code.startsWith("INTAKE_INSURED_NAME")));
+
   const original=pilot.exportCase(home.case_id,{id:"PILOT-BROKER-1",name:"Synthetic Broker One"});
   assert.match(original.filename,/^SYNH01-\d{8}-Pembridge-home\.bdzip$/);
   assert.equal(original.manifest.system,"new-business");
@@ -139,7 +148,8 @@ try {
   repo.upsertCase({case:policyChange},"CREATE_CASE");
   addDoc(policyChange,"CANCELLATION_REQUEST","CANCEL_DOC");
   const auth=repo.saveTransactionAuthorization(policyChange.case_id,{
-    verified:true,documentId:"CANCEL_DOC",logicalDocumentId:"CANCEL_DOCS"
+    verified:true,documentId:"CANCEL_DOC",logicalDocumentId:"CANCEL_DOCS",
+    signers:[{name:"SYNTHETIC POLICY PERSON",documentId:"CANCEL_DOC",logicalDocumentId:"CANCEL_DOCS",signaturePage:1,verified:true}]
   },"PILOT-BROKER-2");
   assert.equal(auth.transaction_authorization.verified,true);
   const cancelPackage=pilot.exportCase(policyChange.case_id,{id:"PILOT-BROKER-2",name:"Synthetic Broker Two"});
@@ -153,6 +163,30 @@ try {
   // A package whose filename is misleading is still routed by the manifest.
   assert.equal(pilot.listInbox("new-business").length,1);
 
+  const joint=baseChange();
+  joint.insured.co_insured=[{name:"SYNTHETIC SECOND PERSON"}];
+  repo.upsertCase({case:joint},"CREATE_CASE");
+  addDoc(joint,"CANCELLATION_REQUEST","JOINT_REQ");
+  const jointRequest={verified:true,documentId:"JOINT_REQ",logicalDocumentId:"JOINT_REQS"};
+  const signer={name:"SYNTHETIC POLICY PERSON",documentId:"JOINT_REQ",logicalDocumentId:"JOINT_REQS",signaturePage:1,verified:true};
+  const signer2={...signer,name:"SYNTHETIC SECOND PERSON"};
+  assert.throws(()=>repo.saveTransactionAuthorization(joint.case_id,jointRequest),/distinct verified signature/);
+  assert.throws(()=>repo.saveTransactionAuthorization(joint.case_id,{...jointRequest,signers:[signer,signer]}),/distinct verified signature/);
+  assert.throws(()=>repo.saveTransactionAuthorization(joint.case_id,{...jointRequest,signers:[signer,{...signer2,verified:false}]}),/manual confirmation/);
+  assert.throws(()=>repo.saveTransactionAuthorization(joint.case_id,{...jointRequest,signers:[signer,{...signer2,signaturePage:4}]}),/valid page/);
+  const verifiedJoint=repo.saveTransactionAuthorization(joint.case_id,{...jointRequest,signers:[signer,signer2]});
+  assert.equal(verifiedJoint.transaction_authorization.signers.length,2);
+  assert(repo.transactionAuthorizationStillValid(verifiedJoint));
+  repo.upsertCase({case:{...verifiedJoint,insured:{...verifiedJoint.insured,co_insured:[{name:"SYNTHETIC DIFFERENT PERSON"}]}}});
+  assert.equal(repo.getCase(joint.case_id).transaction_authorization,undefined);
+  const changed=baseChange();repo.upsertCase({case:changed},"CREATE_CASE");
+  const changeEvidence=addDoc(changed,"CANCELLATION_REQUEST","CHANGED_REQ");
+  repo.saveTransactionAuthorization(changed.case_id,{verified:true,documentId:"CHANGED_REQ",logicalDocumentId:"CHANGED_REQS",signers:[
+    {name:"SYNTHETIC POLICY PERSON",documentId:"CHANGED_REQ",logicalDocumentId:"CHANGED_REQS",signaturePage:1,verified:true}]});
+  repo.updateDocument("CHANGED_REQ",{...changeEvidence,documentType:"OTHER",logicalDocuments:changeEvidence.logicalDocuments.map(s=>({...s,documentType:"OTHER"}))});
+  assert.equal(repo.getCase(changed.case_id).transaction_authorization,undefined);
+  const mvrTest=createBlankAutoCase();mvrTest.drivers=[{name:"SYNTHETIC DRIVER",mvr_received:""}];
+  assert(!evaluateIntakeProfile(mvrTest,[]).blockers.some(b=>b.code==="MVR_RECEIVED_DATE_MISSING"));
   const noAuth=baseChange();
   assert(evaluateIntakeProfile(noAuth,[]).blockers.some(b=>b.code==="INTAKE_CHANGE_AUTHORIZATION"));
   noAuth.policy_change.transaction_types=["ADD_VEHICLE"];
