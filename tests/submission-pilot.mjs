@@ -185,7 +185,7 @@ try {
     {name:"SYNTHETIC POLICY PERSON",documentId:"CHANGED_REQ",logicalDocumentId:"CHANGED_REQS",signaturePage:1,verified:true}]});
   repo.updateDocument("CHANGED_REQ",{...changeEvidence,documentType:"OTHER",logicalDocuments:changeEvidence.logicalDocuments.map(s=>({...s,documentType:"OTHER"}))});
   assert.equal(repo.getCase(changed.case_id).transaction_authorization,undefined);
-  const mvrTest=createBlankAutoCase();mvrTest.drivers=[{name:"SYNTHETIC DRIVER",mvr_received:""}];
+  const mvrTest=createBlankAutoCase();mvrTest.drivers=[{name:"SYNTHETIC DRIVER",mvr_received:"",telematics:{enabled:false},convictions:[],driver_training:false}];
   assert(!evaluateIntakeProfile(mvrTest,[]).blockers.some(b=>b.code==="MVR_RECEIVED_DATE_MISSING"));
   const noAuth=baseChange();
   assert(evaluateIntakeProfile(noAuth,[]).blockers.some(b=>b.code==="INTAKE_CHANGE_AUTHORIZATION"));
