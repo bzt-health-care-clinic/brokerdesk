@@ -26,6 +26,27 @@ const normalizeTypes = item => {
 };
 const json = value => Buffer.from(JSON.stringify(value, null, 2), "utf8");
 const maxPreview = source => source.length > 120 ? source.slice(0, 117) + "..." : source;
+/** Filename is advisory, never the authority for queue routing. */
+function filenameRoutingWarning(manifest,item,filename) {
+  const matched=basename(String(filename||"")).toLowerCase().match(/-([a-z0-9_]+)\.bdzip$/);
+  if(!matched)return null;
+  const indicated=matched[1];
+  const permitted=new Set(["auto","home","cancellation","add_vehicle","delete_vehicle",
+    "vehicle_substitution","add_driver","delete_driver","driver_reassignment","name_change",
+    "address_change","vehicle_use_change","annual_km_change","commute_change",
+    "coverage_change","deductible_change","lessor_change","lienholder_change",
+    "payment_change","endorsement_change","opcf16_add","opcf16_remove","opcf16_reinstate",
+    "opcf17_add","opcf17_remove","opcf17_reinstate","other_policy_change"]);
+  if(!permitted.has(indicated))return null;
+  const expected=manifest.system==="new-business"?
+    item.case_type==="new_auto"?"auto":"home":
+    String(manifest.primary_transaction_type||"").toLowerCase();
+  if(!expected||indicated===expected)return null;
+  return {code:"INTAKE_FILENAME_ROUTE_MISMATCH",
+    message:"Attachment filename suggests "+indicated+" but verified Manifest/Case type is "+
+      expected+"; routed by Manifest. Confirm Broker's intended transaction.",
+    field:"filename"};
+}
 
 /**
  * This is a loopback pilot. Broker identities are self-reported and must be
@@ -187,6 +208,8 @@ export class SubmissionPilotService {
    */
   importArchive(archive, originalFilename = "submission.bdzip") {
     const { manifest, item, records, parts, profile, manifestHash } = this.validateArchive(archive);
+    const filenameWarning=filenameRoutingWarning(manifest,item,originalFilename);
+    if(filenameWarning)profile.warnings=[...profile.warnings,filenameWarning];
     const existing = this.db.prepare("SELECT * FROM imported_packages WHERE package_id=?").get(manifest.package_id);
     if (existing) {
       if (existing.manifest_sha256 !== manifestHash) throw bad("Package ID was reused with different contents.", 409);
