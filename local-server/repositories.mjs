@@ -223,7 +223,8 @@ export class LocalRepositories {
   // Prevents direct API calls, section edits and file replacement from leaving a
   // completed case with a signature that no longer has valid source evidence.
   revokeInvalidSignature(caseId, reason) {
-    const item = this.getCase(caseId);
+    let item = this.getCase(caseId);
+    let revokedAuthorization = false;
     if (item?.transaction_authorization && !this.transactionAuthorizationStillValid(item)) {
       const modified = { ...item };
       delete modified.transaction_authorization;
@@ -232,9 +233,10 @@ export class LocalRepositories {
       audit(this.db, "TRANSACTION_AUTH_WITHDRAWN", { caseId,
         documentId: item.transaction_authorization.document_id,
         details: {reason, logicalDocumentId: item.transaction_authorization.logical_document_id ?? null} });
-      if (!item.signed) return true;
+      revokedAuthorization = true;
+      item = this.getCase(caseId); // do not re-save a withdrawn authorization
     }
-    if (!item?.signed || this.signedEvidenceStillValid(item)) return false;
+    if (!item?.signed || this.signedEvidenceStillValid(item)) return revokedAuthorization;
     const cleared = clearSignature(item);
     this.upsertCase({ case: cleared }, "UPDATE_CASE", { trustedSignature: true });
     audit(this.db, "SIGNED_EVIDENCE_WITHDRAWN", { caseId, documentId: item.signed_document_id ?? null,
