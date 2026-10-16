@@ -16,6 +16,13 @@ export interface IntakeSupportProof extends IntakeEvidenceBinding {
   verified_at: string;
   verified_by: string;
 }
+/** Server-owned vehicle selection for a policy-level OPCF 43 on a multi-vehicle case. */
+export interface Opcf43VehicleAssignment {
+  vehicle_key: string;
+  vehicle_vin: string;
+  verified_at: string;
+  verified_by: string;
+}
 export interface SelectedDiscount {
   kind: DiscountKind;
   subject_key: string;
@@ -68,7 +75,7 @@ export function vehicleKey(vehicle: Vehicle): string {
 export function availableSubjectKeys(item: InsuranceCase, type: "VEHICLE"|"DRIVER"): string[] {
   if (type === "VEHICLE") {
     const keys=(item.vehicles??[]).map(vehicleKey);
-    return keys.length === new Set(keys).size && keys.every(Boolean) ? keys : [];
+    return keys.length === new Set(keys.map(k=>k.toUpperCase())).size && keys.every(Boolean) ? keys : [];
   }
   const keys=(item.drivers??[]).map(driver => String(driver.id || driver.name || "").trim());
   return keys.length === new Set(keys.map(v=>v.toUpperCase())).size && keys.every(Boolean) ? keys : [];
@@ -105,9 +112,9 @@ export function proofEvidenceValid(proof: IntakeSupportProof | undefined, record
 const anyValid = (proofs: IntakeSupportProof[], records: UploadedDocumentRecord[],
   purpose: SupportPurpose, code: string, subject_key?:string) =>
   proofs.some(p => p.purpose===purpose && p.code===code &&
-    (subject_key===undefined || p.subject_key===subject_key) &&
+    (subject_key===undefined || p.subject_key.toUpperCase()===subject_key.toUpperCase()) &&
     !proofs.some(other=>other!==p && other.purpose===purpose && other.code===code &&
-      other.subject_key!==p.subject_key && other.document_id===p.document_id &&
+      other.subject_key.toUpperCase()!==p.subject_key.toUpperCase() && other.document_id===p.document_id &&
       other.logical_document_id===p.logical_document_id) &&
     proofEvidenceValid(p,records));
 export function checkOpcfSupport(item: InsuranceCase, records: UploadedDocumentRecord[]): SupportIssue[] {
@@ -119,15 +126,22 @@ export function checkOpcfSupport(item: InsuranceCase, records: UploadedDocumentR
     const {code}=selection;
     if (code==="43") {
       const explicit=selection.subject_key;
-      const target=explicit ? (vehicles.find(v=>v.toUpperCase()===explicit.toUpperCase())??"") :
-        (vehicles.length===1?vehicles[0]:undefined);
+      const assignment=item.intake_opcf43_vehicle_target;
+      const assignedVehicle=assignment?.verified_at && assignment.verified_by ?
+        (item.vehicles??[]).find(vehicle=>
+          vehicleKey(vehicle).toUpperCase()===assignment.vehicle_key.toUpperCase() &&
+          String(vehicle.vin??"").toUpperCase()===assignment.vehicle_vin.toUpperCase()) : undefined;
+      const target=explicit ? vehicles.find(v=>v.toUpperCase()===explicit.toUpperCase()) :
+        (vehicles.length===1 ? vehicles[0] :
+          assignedVehicle && vehicles.find(v=>v.toUpperCase()===vehicleKey(assignedVehicle).toUpperCase()));
       if (explicit && !target) {
         findings.push({code:"INTAKE_OPCF43_VEHICLE",message:"OPCF 43 target vehicle is not a uniquely identified current vehicle.",field:"policy_change.endorsement_changes"});
-      } else if (target && !anyValid(proofs,records,"OPCF43","43",target)) {
+      } else if (!target) {
+        findings.push({code:"INTAKE_OPCF43_VEHICLE_UNCONFIRMED",
+          message:"Multi-vehicle OPCF 43 requires an explicitly saved vehicle assignment; Bill of Sale on any other car cannot release this gate.",
+          field:"intake_opcf43_vehicle_target"});
+      } else if (!anyValid(proofs,records,"OPCF43","43",target)) {
         findings.push({code:"INTAKE_OPCF43_PROOF",message:"Selected OPCF 43 requires an active Bill of Sale or Lease Agreement linked to its vehicle.",field:"intake_support_evidence",vehicle_id:target});
-      } else if (!target && !proofs.some(p=>p.purpose==="OPCF43"&&p.code==="43"&&
-        vehicles.includes(p.subject_key)&&proofEvidenceValid(p,records))) {
-        findings.push({code:"INTAKE_OPCF43_VEHICLE_PROOF",message:"Identify the OPCF 43 vehicle and link its Bill of Sale / Lease Agreement; unrelated documents cannot satisfy this requirement.",field:"intake_support_evidence"});
       }
       continue;
     }
@@ -154,9 +168,9 @@ export function checkDiscountSupport(item: InsuranceCase, records: UploadedDocum
     if (!(DISCOUNT_TYPES as readonly string[]).includes(selection.kind)) {
       issues.push({code:"INTAKE_DISCOUNT_KIND_INVALID",message:"Discount type is not supported.",field:"intake_discount_review"});continue;
     }
-    const key=selection.kind+"|"+selection.subject_key;
+    const key=selection.kind+"|"+String(selection.subject_key??"").toUpperCase();
     const subject=availableSubjectKeys(item,expectedDiscountSubjectType(selection.kind));
-    if (seen.has(key) || !subject.includes(selection.subject_key)) {
+    if (seen.has(key) || !subject.some(value=>value.toUpperCase()===String(selection.subject_key??"").toUpperCase())) {
       issues.push({code:"INTAKE_DISCOUNT_TARGET_INVALID",message:selection.kind+" must be assigned once to an active "+expectedDiscountSubjectType(selection.kind).toLowerCase()+".",field:"intake_discount_review"});continue;
     }
     seen.add(key);
@@ -199,6 +213,10 @@ export function evaluateIntakeWarnings(item:InsuranceCase, records:UploadedDocum
   const age=Math.floor((assessment-issued)/86400000);
   const max=/\bmax\b/i.test(item.policy?.company??"");
   const threshold=max?60:30;
-  if (age>threshold) warnings.push({code:"INTAKE_QUOTE_AGE",message:"Unbound "+(max?"Max ":"")+"quote is "+age+" days old (threshold "+threshold+" days); refresh or confirm current terms before binding.",field:"intake_warning_facts.quote_issued_date"});
+  if (age>threshold) warnings.push({code:"INTAKE_QUOTE_AGE",
+    message:"Unbound "+(max?"Max ":"")+"quote "+(assessment>current?"will be ":"is ")+age+
+      " days old "+(assessment>current?"on the planned bind date ":"")+
+      "(threshold "+threshold+" days); refresh or confirm current terms before binding.",
+    field:"intake_warning_facts.quote_issued_date"});
   return warnings;
 }

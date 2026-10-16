@@ -90,6 +90,42 @@ try{
   assert(checkOpcfSupport(repo.getCase(endorsement.case_id),repo.listDocuments(endorsement.case_id))
     .some(x=>x.code==="INTAKE_OPCF_SIGNED_PROOF"));
 
+  // Policy-level OPCF 43 with two cars cannot be cleared by an unrelated car's proof.
+  const policyLevel=blank();
+  policyLevel.coverage.endorsements=["OPCF 43"];
+  repo.upsertCase({case:policyLevel},"CREATE_CASE");
+  assert(checkOpcfSupport(repo.getCase(policyLevel.case_id),[]).some(x=>
+    x.code==="INTAKE_OPCF43_VEHICLE_UNCONFIRMED"));
+  addDoc(policyLevel,"BILL_OF_SALE","POLICY_LEVEL_BILL_V1");
+  assert.throws(()=>repo.saveIntakeProof(policyLevel.case_id,
+    proof("OPCF43","43","V-1","POLICY_LEVEL_BILL_V1")),/Save the selected OPCF 43 vehicle/);
+  const assigned=repo.saveIntakeOpcf43Target(policyLevel.case_id,{vehicleKey:"v-2",verified:true});
+  assert.equal(assigned.intake_opcf43_vehicle_target.vehicle_key,"V-2");
+  assert(checkOpcfSupport(assigned,repo.listDocuments(policyLevel.case_id)).some(x=>
+    x.code==="INTAKE_OPCF43_PROOF"&&x.vehicle_id==="V-2"));
+  repo.saveIntakeProof(policyLevel.case_id,
+    proof("OPCF43","43","V-1","POLICY_LEVEL_BILL_V1"));
+  assert(checkOpcfSupport(repo.getCase(policyLevel.case_id),repo.listDocuments(policyLevel.case_id))
+    .some(x=>x.code==="INTAKE_OPCF43_PROOF"&&x.vehicle_id==="V-2"));
+  // Autosave may not forge or switch the server-owned OPCF 43 vehicle assignment.
+  const prior=repo.getCase(policyLevel.case_id);
+  repo.upsertCase({case:{...prior,intake_opcf43_vehicle_target:{
+    ...prior.intake_opcf43_vehicle_target,vehicle_key:"V-1"
+  }}});
+  assert.equal(repo.getCase(policyLevel.case_id).intake_opcf43_vehicle_target.vehicle_key,"V-2");
+  addDoc(policyLevel,"LEASE_DOCUMENT","POLICY_LEVEL_LEASE_V2");
+  repo.saveIntakeProof(policyLevel.case_id,
+    proof("OPCF43","43","V-2","POLICY_LEVEL_LEASE_V2"));
+  assert(!checkOpcfSupport(repo.getCase(policyLevel.case_id),repo.listDocuments(policyLevel.case_id))
+    .some(x=>x.code.startsWith("INTAKE_OPCF43_")));
+  const previous=repo.getCase(policyLevel.case_id);
+  const reidentified={...previous,vehicles:previous.vehicles.map(vehicle=>vehicle.id==="V-2"?
+    {...vehicle,vin:"CHANGEDVIN123456"}:vehicle)};
+  repo.upsertCase({case:reidentified});
+  assert.equal(repo.getCase(policyLevel.case_id).intake_opcf43_vehicle_target,undefined);
+  assert(checkOpcfSupport(repo.getCase(policyLevel.case_id),repo.listDocuments(policyLevel.case_id))
+    .some(x=>x.code==="INTAKE_OPCF43_VEHICLE_UNCONFIRMED"));
+
   // Only discounts confirmed as selected create blockers; factual retired/tires flags do not.
   const discounts=blank();
   repo.upsertCase({case:discounts},"CREATE_CASE");
@@ -124,6 +160,20 @@ try{
   assert(evaluateIntakeProfile(repo.getCase(discounts.case_id),repo.listDocuments(discounts.case_id))
     .blockers.some(x=>x.code==="INTAKE_DISCOUNT_PROOF"));
 
+  // Case-insensitive subject keys are normalized to the actual driver/vehicle identity.
+  const historical={...repo.getCase(discounts.case_id),
+    intake_discount_review:{reviewed_at:"2026-10-16T00:00:00Z",reviewed_by:"Synthetic",
+      selections:[{kind:"WINTER_TIRES",subject_key:"v-1"}]}};
+  assert(!checkDiscountSupport(historical,repo.listDocuments(discounts.case_id)).length);
+  const canonical=repo.saveIntakeDiscountReview(discounts.case_id,{
+    selections:[{kind:"WINTER_TIRES",subject_key:"v-1"}]});
+  assert.equal(canonical.intake_discount_review.selections[0].subject_key,"V-1");
+  const renewed=repo.saveIntakeProof(discounts.case_id,
+    proof("DISCOUNT","WINTER_TIRES","v-1","WINTER_CLAIM"));
+  assert(renewed.intake_support_evidence.some(p=>p.purpose==="DISCOUNT"&&
+    p.code==="WINTER_TIRES"&&p.subject_key==="V-1"));
+  assert(!checkDiscountSupport(renewed,repo.listDocuments(discounts.case_id)).length);
+
   // Warning boundaries are pure, deterministic and do not enter the blocker list.
   const warn=blank();
   warn.vehicles=[{...warn.vehicles[0],year:2011}];
@@ -148,6 +198,13 @@ try{
   repo.saveIntakeProof(warn.case_id,proof("OLD_VEHICLE","PHYSICAL_DAMAGE","V-1","PHOTO_FOR_OLD"));
   assert(!evaluateIntakeWarnings(repo.getCase(warn.case_id),repo.listDocuments(warn.case_id),"2026-10-16")
     .some(x=>x.code==="INTAKE_OLD_VEHICLE_PHYSICAL_DAMAGE"));
+  const future={...warn,intake_warning_facts:{quote_issued_date:"2026-09-14",
+    quote_bound:false,planned_bind_date:"2026-10-20"}};
+  assert(evaluateIntakeWarnings(future,[],"2026-10-16").some(x=>
+    x.code==="INTAKE_QUOTE_AGE"&&x.message.includes("will be 36 days old")));
+  assert(evaluateIntakeWarnings(warn,[],"2026-10-16").some(x=>
+    x.code==="INTAKE_QUOTE_AGE"&&x.message.includes("is 32 days old")));
+
   const max={...warn,policy:{...warn.policy,company:"Max"},
     intake_warning_facts:{quote_issued_date:"2026-08-18",quote_bound:false}};
   assert(!evaluateIntakeWarnings(max,[],"2026-10-16").some(x=>x.code==="INTAKE_QUOTE_AGE"));

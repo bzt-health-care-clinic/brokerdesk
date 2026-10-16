@@ -9,7 +9,7 @@ import {
   proofKey, selectedOpcfCodes, vehicleKey,
   type DiscountKind, type IntakeSupportProof, type SelectedDiscount, type SupportPurpose,
 } from "@/lib/intake-support-evidence";
-import { pilotDiscountReview, pilotSupportProof, pilotWarningFacts } from "@/lib/pilot-client";
+import { pilotDiscountReview, pilotSelectOpcf43Vehicle, pilotSupportProof, pilotWarningFacts } from "@/lib/pilot-client";
 
 type Props={data:InsuranceCase;records:UploadedDocumentRecord[];onCaseSaved:(next:InsuranceCase)=>void};
 type ProofChoice={id:string;documentId:string;logicalDocumentId:string;type:string;label:string};
@@ -117,6 +117,16 @@ export function IntakeSupportPanel({data,records,onCaseSaved}:Props){
     (expectedDiscountSubjectType(kind)==="VEHICLE"?vehicles:drivers)
       .map(subject_key=>({kind,subject_key,key:kind+"|"+subject_key})));
   const reviewedDiscounts=data.intake_discount_review?.selections??[];
+  async function selectOpcf43Vehicle(key:string){
+    setBusy(true);setMessage("");
+    try{
+      const next=await pilotSelectOpcf43Vehicle(data.case_id,key,Boolean(key));
+      onCaseSaved(next);
+      setMessage(key?"OPCF 43 target vehicle recorded; now link its own Bill of Sale or Lease Agreement.":
+        "OPCF 43 target vehicle selection cleared.");
+    }catch(error){setMessage(error instanceof Error?error.message:"Cannot assign OPCF 43 vehicle.");}
+    finally{setBusy(false);}
+  }
   async function saveDiscounts(){
     setBusy(true);setMessage("");
     try{
@@ -150,16 +160,30 @@ export function IntakeSupportPanel({data,records,onCaseSaved}:Props){
       {!selected.length&&<small>No selected OPCF 43 / 28A / 49 / 19 / 13C in structured fields.</small>}
       {selected.map((entry,index)=>{
         const is43=entry.code==="43";
-        const subject=entry.subject_key??(vehicles.length===1?vehicles[0]:endorsementVehicle[entry.code]??"");
+        const mustSaveVehicle=is43 && !entry.subject_key && vehicles.length>1;
+        const subject=entry.subject_key ??
+          (vehicles.length===1?vehicles[0]:
+            mustSaveVehicle?data.intake_opcf43_vehicle_target?.vehicle_key??"":
+              endorsementVehicle[entry.code]??"");
         return <div key={entry.code+"-"+(entry.subject_key??"")+"-"+index}>
-          {isAuto&&vehicles.length>1&&!entry.subject_key&&<label>
+          {mustSaveVehicle&&<label>
+            OPCF 43 — 必须确认实际投保的车辆（不能任意关联另一辆车的证明）
+            <select aria-label="Save selected OPCF 43 insured vehicle" disabled={busy}
+              value={data.intake_opcf43_vehicle_target?.vehicle_key??""}
+              onChange={event=>void selectOpcf43Vehicle(event.target.value)}>
+              <option value="">请选择并保存 OPCF 43 所属车辆</option>
+              {vehicles.map(vehicle=><option value={vehicle} key={vehicle}>{vehicle}</option>)}
+            </select>
+          </label>}
+          {!is43&&isAuto&&vehicles.length>1&&!entry.subject_key&&<label>
             Vehicle receiving OPCF {entry.code}
             <select aria-label={"Vehicle for selected OPCF "+entry.code}
               value={endorsementVehicle[entry.code]??""}
               onChange={e=>setEndorsementVehicle(p=>({...p,[entry.code]:e.target.value}))}>
               <option value="">Choose the actual endorsed vehicle</option>
               {vehicles.map(v=><option value={v} key={v}>{v}</option>)}
-            </select></label>}
+            </select>
+          </label>}
           <ProofEditor data={data} records={records} onCaseSaved={onCaseSaved}
             purpose={is43?"OPCF43":"SIGNED_OPCF"} code={entry.code} subjectKey={subject}
             label={is43?"OPCF 43 Bill of Sale / Lease Agreement":"OPCF "+entry.code+" signed endorsement"}/>

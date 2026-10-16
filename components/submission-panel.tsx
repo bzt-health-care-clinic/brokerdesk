@@ -9,6 +9,7 @@ import type { IntakeResult } from "@/lib/intake-profile";
 import { primaryTransactionType } from "@/lib/intake-profile";
 import { isPolicyChange } from "@/lib/policy-change";
 import { pilotAuthorize, pilotCompareInsuredNames, pilotDownload, pilotPreflight } from "@/lib/pilot-client";
+import { appendSuggestedPolicyholder, parsedPolicyholderSuggestions } from "@/lib/intake-name-suggestions";
 
 type Props = {
   data: InsuranceCase;
@@ -63,12 +64,24 @@ export function SubmissionPanel({data,records,saveState,onCaseSaved,onNavigate}:
   },[data.case_type,records]);
   const applicationDocs=newBusinessOptions.filter(o=>o.type.endsWith("_APPLICATION"));
   const quoteDocs=newBusinessOptions.filter(o=>o.type.endsWith("_QUOTE"));
+  const chosenApplication=applicationDocs.find(o=>o.id===applicationChoice) ??
+    applicationDocs.find(o=>o.documentId===data.signed_document_id &&
+      o.logicalId===data.signed_logical_document_id);
+  const chosenQuote=quoteDocs.find(o=>o.id===quoteChoice)??quoteDocs[0];
+  const applicationSuggestions=useMemo(()=>
+    parsedPolicyholderSuggestions(records,chosenApplication?.documentId,
+      chosenApplication?.logicalId,chosenApplication?.type),
+    [records,chosenApplication?.documentId,chosenApplication?.logicalId,chosenApplication?.type]);
+  const quoteSuggestions=useMemo(()=>
+    parsedPolicyholderSuggestions(records,chosenQuote?.documentId,
+      chosenQuote?.logicalId,chosenQuote?.type),
+    [records,chosenQuote?.documentId,chosenQuote?.logicalId,chosenQuote?.type]);
   const policyholders=[data.insured.name,...(data.insured.co_insured??[]).map(person=>person.name)].filter(Boolean);
   const mustConfirmSigners=change&&(policyholders.length>1||transaction==="CANCELLATION");
   const parseNames=(text:string)=>text.split(/\r?\n/).map(value=>value.trim()).filter(Boolean);
   async function confirmNames(verified:boolean){
-    const application=applicationDocs.find(o=>o.id===applicationChoice)??applicationDocs.find(o=>o.documentId===data.signed_document_id&&o.logicalId===data.signed_logical_document_id);
-    const quote=quoteDocs.find(o=>o.id===quoteChoice)??quoteDocs[0];
+    const application=chosenApplication;
+    const quote=chosenQuote;
     if(verified&&(!application||!quote||!applicationNames.trim()||!quoteNames.trim())){setMessage("Select the signed Application and Quote and enter each document's named insureds, one per line.");return;}
     if(verified&&!window.confirm("Have you visually checked ALL named insured names in both active documents, including joint applicants?"))return;
     setBusy(true);
@@ -135,7 +148,27 @@ export function SubmissionPanel({data,records,saveState,onCaseSaved,onNavigate}:
               <option value="">Choose quote</option>{quoteDocs.map(o=><option value={o.id} key={o.id}>{o.label}</option>)}
             </select></label>
           <label>Names on signed Application — one per line<textarea aria-label="Named insureds on signed application" value={applicationNames} onChange={e=>setApplicationNames(e.target.value)}/></label>
+          <div className="pilot-name-suggestions" aria-label="Application document extracted policyholders">
+            <small>Application 文件解析出的被保人姓名（OCR 可能识别错误，需核对原件）：</small>
+            {!applicationSuggestions.length&&<small>未解析出姓名，可直接手工填写。</small>}
+            {applicationSuggestions.map((suggestion,index)=><div className="pilot-name-suggestion" key={suggestion.name+"-"+index}>
+              <span>{suggestion.role}: {suggestion.name}</span>
+              <Button type="button" size="sm" variant="outline"
+                aria-label={"填入 Application "+suggestion.name}
+                onClick={()=>setApplicationNames(previous=>appendSuggestedPolicyholder(previous,suggestion.name))}>填入</Button>
+            </div>)}
+          </div>
           <label>Names on Quote — one per line<textarea aria-label="Named insureds on quote" value={quoteNames} onChange={e=>setQuoteNames(e.target.value)}/></label>
+          <div className="pilot-name-suggestions" aria-label="Quote document extracted policyholders">
+            <small>Quote 文件解析出的被保人姓名（OCR 可能识别错误，需核对原件）：</small>
+            {!quoteSuggestions.length&&<small>未解析出姓名，可直接手工填写。</small>}
+            {quoteSuggestions.map((suggestion,index)=><div className="pilot-name-suggestion" key={suggestion.name+"-"+index}>
+              <span>{suggestion.role}: {suggestion.name}</span>
+              <Button type="button" size="sm" variant="outline"
+                aria-label={"填入 Quote "+suggestion.name}
+                onClick={()=>setQuoteNames(previous=>appendSuggestedPolicyholder(previous,suggestion.name))}>填入</Button>
+            </div>)}
+          </div>
           <Button variant="outline" size="sm" disabled={busy||!data.signed||!applicationDocs.length||!quoteDocs.length}
             onClick={()=>void confirmNames(true)}>Record manual name comparison</Button></>}
     </div>}

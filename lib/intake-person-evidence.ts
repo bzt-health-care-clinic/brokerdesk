@@ -29,24 +29,33 @@ export interface ChangeSignerAttestation extends IntakeEvidenceBinding {
 export const normalizedPersonName = (name: unknown): string =>
   typeof name === "string" ? name.normalize("NFKC").replace(/\s+/g, " ").trim().toUpperCase() : "";
 
-export function insuredPersonNames(item: InsuranceCase): string[] {
-  const insured = item.insured;
-  if (!insured || !normalizedPersonName(insured.name) || !Array.isArray(insured.co_insured) ||
-    insured.co_insured.some(person => !normalizedPersonName(person?.name))) return [];
-  const names = [insured.name, ...insured.co_insured.map(person => person.name)];
-  const normalized = names.map(normalizedPersonName);
-  return normalized.some(name => name.length > 120) ||
-    new Set(normalized).size !== normalized.length ? [] : normalized;
-}
+// Comparison-only canonicalization. Original spelling and punctuation are retained in records.
+const nameTokens = (name: unknown): string[] => {
+  if (typeof name !== "string") return [];
+  return name.normalize("NFKC").toUpperCase()
+    .replace(/[.,'’\x60\-_/\\()[\]{}:;!?"“”‘]/g, " ")
+    .split(/\s+/).filter(Boolean).sort();
+};
 export function sameNamedPersons(first: unknown, second: unknown): boolean {
   if (!Array.isArray(first) || !Array.isArray(second) || first.length === 0 ||
-    first.length !== second.length || first.length > 8 || first.some(name =>
-      !normalizedPersonName(name) || normalizedPersonName(name).length > 120) ||
-    second.some(name => !normalizedPersonName(name) || normalizedPersonName(name).length > 120)) return false;
-  const left = first.map(normalizedPersonName).sort();
-  const right = second.map(normalizedPersonName).sort();
-  return new Set(left).size === left.length && new Set(right).size === right.length &&
-    left.every((name,index) => name === right[index]);
+    first.length !== second.length || first.length > 8) return false;
+  const left = first.map(nameTokens), right = second.map(nameTokens);
+  const key = (tokens: string[]) => tokens.join(" ");
+  if (left.some(tokens => tokens.length === 0 || key(tokens).length > 120) ||
+      right.some(tokens => tokens.length === 0 || key(tokens).length > 120)) return false;
+  // Reordered/punctuated names count as duplicates within the same policyholder list.
+  if (new Set(left.map(key)).size !== left.length ||
+      new Set(right.map(key)).size !== right.length) return false;
+  const sortedLeft = left.map(key).sort(), sortedRight = right.map(key).sort();
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
+}
+export function insuredPersonNames(item: InsuranceCase): string[] {
+  const insured = item.insured;
+  const others = insured?.co_insured ?? [];
+  if (!insured || !Array.isArray(others)) return [];
+  const names = [insured.name, ...others.map(person => person?.name)];
+  if (!sameNamedPersons(names, names)) return [];
+  return names.map(normalizedPersonName);
 }
 const overlaps = (a: number | undefined, b: number | undefined, start: number, end: number) =>
   (a ?? 1) <= end && (b ?? a ?? 1) >= start;

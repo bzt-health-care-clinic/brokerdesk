@@ -48,6 +48,10 @@ jobs:
         run: |
           node --experimental-transform-types tests/submission-pilot.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Document-backed tokenized insured names and OCR suggestion regressions
+        run: |
+          node --experimental-transform-types tests/intake-name-matching.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: v1.0 OPCF, discount and yellow warning evidence regressions
         run: |
           node --experimental-transform-types tests/intake-v1-support.mjs

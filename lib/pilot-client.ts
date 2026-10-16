@@ -53,6 +53,12 @@ export async function pilotAuthorize(id: string,
     method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(request)}));
   return response.json();
 }
+export async function pilotSelectOpcf43Vehicle(id:string,vehicleKey:string,verified=true):Promise<InsuranceCase>{
+  const response=await checked(await fetch(API+"/cases/"+encodeURIComponent(id)+"/opcf43-vehicle-target",{
+    method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({vehicleKey,verified})}));
+  return response.json();
+}
 export async function pilotSupportProof(id:string,request:{
   action:"verify"|"revoke";purpose:SupportPurpose;code:string;subjectKey:string;confirmed?:boolean;
   documentId?:string;logicalDocumentId?:string;signaturePage?:number;signerName?:string;

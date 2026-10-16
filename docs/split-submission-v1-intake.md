@@ -82,3 +82,13 @@ Manual confirmation creates an audited, server-owned evidence record; it is not 
 - Do not use a second Auditor or expose the loopback server to LAN without the separate authenticated HTTPS design. Formal Broker IDs and real pilot approvals remain outside this code batch.
 
 All GitHub tests remain fully synthetic and must never store customer-identifying documents, source PDFs or local SQLite databases.
+
+## Post-v1 review fixes: names, manual OCR hints, OPCF 43 assignment
+
+- **Name comparison semantics:** Broker preflight and Node persistence both tokenize NFKC uppercase names, ignore punctuation/word order for comparison only, preserve original spelling, prohibit duplicate people and still enforce counts and token identity. A missing co_insured array on a legacy single-name Case is treated as empty; malformed non-arrays remain invalid.
+- **OCR name suggestions:** When a Broker selects an active Application/Quote section, show parsed namedInsured/coInsured names for that exact file. Each suggestion has a **填入** button, which appends to the corresponding input and does not auto-approve or save evidence. Brokers can edit, and must still inspect the source PDF and manually confirm.
+- **Policy-level OPCF 43 / multiple cars:** The Broker must explicitly save the specific receiving vehicle to a server-owned, VIN-bound field. Until then, no Bill of Sale/Lease evidence on any car can clear the OPCF 43 blocker. An A-car proof cannot satisfy the B-car assignment. Vehicle/VIN edits invalidate the target. A Policy Change endorsement carrying an explicit vehicle requires its exact vehicle as before.
+- **Minor consistency:** Discount proof vehicle/driver keys are matched case-insensitively and canonicalized server-side. Quote-age warnings say **will be** when evaluated against a future planned bind date; the thresholds are unchanged.
+- **Existing boundaries retained by design:** discount proof checks only explicitly selected claims and does not infer discounts from retirement or tire flags alone. Quote and old-car warnings use reliably recorded quote/physical-damage facts; unknown facts do not cause guessed yellow warnings.
+
+Regression coverage: tests/intake-name-matching.mjs and tests/intake-v1-support.mjs, included in the Windows pilot submission workflow. The Draft PR is not authorization to use real client records before manual pilot sign-off.

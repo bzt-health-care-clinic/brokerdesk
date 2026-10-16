@@ -73,6 +73,9 @@ export const server = http.createServer(async (request, response) => {
     const insuredCompare = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/insured-name-comparison$/);
     if (insuredCompare && request.method === "POST") return sendJson(response,request,200,
       repositories.saveNamedInsuredComparison(insuredCompare[1],await readJson(request)));
+    const opcf43Target = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/opcf43-vehicle-target$/);
+    if (opcf43Target && request.method === "POST") return sendJson(response,request,200,
+      repositories.saveIntakeOpcf43Target(opcf43Target[1],await readJson(request)));
     const verifyIntakeProof = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/intake-proof$/);
     if (verifyIntakeProof && request.method === "POST") return sendJson(response,request,200,
       repositories.saveIntakeProof(verifyIntakeProof[1],await readJson(request)));

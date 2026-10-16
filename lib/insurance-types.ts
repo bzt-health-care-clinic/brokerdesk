@@ -543,6 +543,8 @@ export interface InsuranceCase {
   named_insured_comparison?: import("./intake-person-evidence.ts").InsuredNameComparison;
   /** Server-verified evidence confirmations; an ordinary Case JSON save cannot forge these. */
   intake_support_evidence?: import("./intake-support-evidence.ts").IntakeSupportProof[];
+  /** Server-authorized selected vehicle for policy-level OPCF 43 when multiple vehicles are rated. */
+  intake_opcf43_vehicle_target?: import("./intake-support-evidence.ts").Opcf43VehicleAssignment;
   /** Explicitly reviewed discounts actually selected on the quote/policy. */
   intake_discount_review?: import("./intake-support-evidence.ts").DiscountSelectionReview;
   /** Manually confirmed quote/coverage facts needed to emit non-blocking yellow warnings. */

@@ -123,6 +123,7 @@ export class SubmissionPilotService {
       transaction_authorization: item.transaction_authorization ?? null,
       named_insured_comparison: item.named_insured_comparison ?? null,
       intake_support_evidence: item.intake_support_evidence ?? [],
+      intake_opcf43_vehicle_target: item.intake_opcf43_vehicle_target ?? null,
       intake_discount_review: item.intake_discount_review ?? null,
       intake_warning_facts: item.intake_warning_facts ?? null,
     };
@@ -169,7 +170,7 @@ export class SubmissionPilotService {
     if (JSON.stringify(manifest.transaction_authorization ?? null) !== JSON.stringify(item.transaction_authorization ?? null))
       throw bad("Manifest authorization does not match the Case.");
     if(JSON.stringify(manifest.named_insured_comparison??null)!==JSON.stringify(item.named_insured_comparison??null))throw bad("Manifest insured names do not match the Case.");
-    for (const field of ["intake_support_evidence","intake_discount_review","intake_warning_facts"]) {
+    for (const field of ["intake_support_evidence","intake_opcf43_vehicle_target","intake_discount_review","intake_warning_facts"]) {
       const fallback = field==="intake_support_evidence" ? [] : null;
       if (JSON.stringify(manifest[field]??fallback)!==JSON.stringify(item[field]??fallback))
         throw bad("Manifest supporting evidence / discount / warning facts do not match the Case.");
@@ -259,6 +260,8 @@ export class SubmissionPilotService {
       if (loaded.transaction_authorization && !this.repo.transactionAuthorizationStillValid(loaded))
         throw bad("Imported transaction authorization evidence could not be verified.");
       if(loaded.named_insured_comparison&&!this.repo.namedInsuredComparisonStillValid(loaded))throw bad("Imported insured-name comparison evidence could not be verified.");
+      if (loaded.intake_opcf43_vehicle_target && !this.repo.intakeOpcf43TargetStillValid(loaded))
+        throw bad("Imported OPCF 43 vehicle assignment could not be verified.");
       if ((loaded.intake_support_evidence??[]).some(proof=>!this.repo.intakeProofStillValid(loaded,proof)))
         throw bad("Imported supporting evidence reference failed SHA-256 / page validation.");
       renameSync(staging, target);

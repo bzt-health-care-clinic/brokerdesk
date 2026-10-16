@@ -193,3 +193,9 @@ button,a,input,textarea,[role="button"],[tabindex] { -webkit-tap-highlight-color
 .pilot-intake-support input:not([type=checkbox]),.pilot-intake-support select,.pilot-auth-control textarea,.pilot-auth-control input:not([type=checkbox]) {min-height:35px;width:100%;padding:6px 8px;border:1px solid #9da6ae;border-radius:7px;background:var(--background,white);color:var(--foreground,#172631);}
 .pilot-intake-support label.pilot-check-label {display:flex;align-items:center;gap:8px;font-weight:450;}
 .pilot-proof-fields a {text-decoration:underline;font-size:.85rem;}
+
+/* Manual, document-scoped OCR name suggestions. Never auto-approve identity. */
+.pilot-name-suggestions { display:grid;gap:5px;padding:9px 11px;border:1px solid var(--border,#9da6ae);border-radius:8px; }
+.pilot-name-suggestion { display:flex;align-items:center;justify-content:space-between;gap:9px;flex-wrap:wrap; }
+.pilot-name-suggestion span {overflow-wrap:anywhere;font-size:.85rem;}
+.pilot-name-suggestion button {flex-shrink:0;}
