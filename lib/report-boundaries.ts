@@ -9,12 +9,13 @@ export function reportIdentity(text: string) {
   const header = reportHeader(text);
   const pick = (pattern: RegExp) => header.match(pattern)?.[1]?.trim().toUpperCase();
   const sequence = text.match(/\bpage\s+(\d+)\s*(?:of|\/)\s*(\d+)\b/i);
-  const reportId = pick(/\breport\s*(?:(?:id|number|no\.?)\s*[:#-]?\s*|[:#]\s*|\s+)([A-Z0-9-]*\d[A-Z0-9-]*)\b/i);
+  const paired = (label: string) => pick(new RegExp(`^${label}(?:[ \\t]*:[ \\t]*|[ \\t]+|[ \\t]*\\n[ \\t]*)([^\\n]+)`, "im"));
+  const reportId = paired("report[ \\t]*(?:id|number|no\\.?)") ?? pick(/\breport\s*[:#]\s*([A-Z0-9-]*\d[A-Z0-9-]*)\b/i);
   return {
     reportId,
-    licence: pick(/^(?:report subject licence|licence number|driver licence|DL)\s*[:#]\s*([^\n]+)/im)?.replace(/[ -]/g, ""),
-    subjectName: pick(/^(?:report subject|driver name|subject name)\s*:\s*([^\n]+)/im),
-    reportDate: pick(/^report date\s*:\s*([^\n]+)/im),
+    licence: paired("(?:report subject licence|licence number|driver licence|DLN|DL)")?.replace(/[ -]/g, ""),
+    subjectName: paired("(?:report subject(?![ \\t]+licence)|driver name|subject name)"),
+    reportDate: paired("report date"),
     page: sequence ? Number(sequence[1]) : undefined,
     total: sequence ? Number(sequence[2]) : undefined,
     continuation: /\bcontinued|\bcontinuation\b/i.test(text),

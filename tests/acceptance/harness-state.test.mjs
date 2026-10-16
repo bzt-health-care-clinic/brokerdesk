@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { acceptedSuggestionsPersisted, responseDuring, selectedCaseMatches } from './harness-state.mjs';
+import { acceptedSuggestionsPersisted, newPageDuring, responseDuring, selectedCaseMatches } from './harness-state.mjs';
 
 assert(selectedCaseMatches('A synthetic acceptance', 'local-mixedCase · New Auto', 'A synthetic acceptance', 'local-mixedCase'));
 assert(!selectedCaseMatches('A second synthetic case', 'local-mixedCase · New Auto', 'A synthetic acceptance', 'local-mixedCase'));
@@ -24,6 +24,13 @@ try {
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(unhandled, 0);
   await assert.rejects(responseDuring({ waitForResponse: () => Promise.reject(new Error('response timeout')) }, () => true, async () => {}), /response timeout/);
+  let rejectPage;
+  const context = { waitForEvent: event => { assert.equal(event, 'page'); return new Promise((_, reject) => { rejectPage = reject; }); } };
+  await assert.rejects(newPageDuring(context, () => { throw new Error('open click failed'); }), /open click failed/);
+  rejectPage(new Error('new-page timeout'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(unhandled, 0);
+  await assert.rejects(newPageDuring({ waitForEvent: () => Promise.reject(new Error('new-page timeout')) }, async () => {}), /new-page timeout/);
   assert.equal(unhandled, 0);
 } finally { process.off('unhandledRejection', onUnhandled); }
 console.log('PASS: selected identity, persisted suggestions, handled response wait rejection');

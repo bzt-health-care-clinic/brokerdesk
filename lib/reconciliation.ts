@@ -79,7 +79,7 @@ const nonempty = (v: unknown) => v !== undefined && v !== null && v !== "";
 
 function association(data: InsuranceCase, source: ParsedSource, field: string) {
   if (source.claimRecordId && field.startsWith("claim.")) return { type: "CLAIM", lob: "AUTO", id: source.claimRecordId, primary: !data.case_type.includes("home") };
-  const type = driverFields.has(field) ? "DRIVER" : vehicleFields.has(field) ? "VEHICLE" : field === "propertyInsuredSince" || field === "continuouslyInsuredSince" || field === "riskAddress" || field === "mortgagee" || field === "mortgageeAddress" ? "PROPERTY" : "POLICY";
+  const type = driverFields.has(field) ? "DRIVER" : vehicleFields.has(field) ? "VEHICLE" : ["propertyInsuredSince", "continuouslyInsuredSince", "occupiedSince", "riskAddress", "numberOfMortgages", "mortgagee", "mortgageeAddress", "natureOfInterest", "lossPayee", "policyType"].includes(field) ? "PROPERTY" : "POLICY";
   const lob = source.lineOfBusiness ?? (/HAB|PROPERTY|MORTGAGE/.test(source.documentType) ? "HAB" : /AUTO|OWNERSHIP|MVR|DASH|VEHICLE|LEASE|FINANCE/.test(source.documentType) ? "AUTO" : data.case_type.includes("home") ? "HAB" : "AUTO");
   const primaryLob = data.case_type.includes("home") ? "HAB" : "AUTO";
   if (type === "POLICY" || type === "PROPERTY") return { type, lob, id: type === "POLICY" ? data.policy.id! : data.habitational_risk?.id, primary: lob === primaryLob };
@@ -98,7 +98,7 @@ function association(data: InsuranceCase, source: ParsedSource, field: string) {
 function slot(data: InsuranceCase, path: string[]): { target: Record<string, unknown>; key: string } | undefined {
   let value: unknown = data;
   for (const part of path.slice(0, -1)) {
-    if (Array.isArray(value)) value = value.find(item => item.id === part);
+    if (Array.isArray(value)) value = /^\d+$/.test(part) ? value[Number(part)] : value.find(item => item.id === part);
     else if (value && typeof value === "object") value = (value as Record<string, unknown>)[part];
     else return undefined;
   }
@@ -108,6 +108,11 @@ const policyPaths: Record<string, string[]> = { insurer: ["policy", "company"], 
 const driverPaths: Record<string, string> = { licenceClass: "licence_class", g1Date: "g1_date", g2Date: "g2_date", gDate: "g_date", requestDate: "mvr_requested", releaseDate: "mvr_release_date", replyDate: "mvr_reply_date", receivedDate: "mvr_received", issueDate: "mvr_issue_date", expiryDate: "licence_expiry", licenceStatus: "licence_status", conditions: "licence_conditions", demeritPoints: "mvr_demerit_points", convictions: "mvr_convictions" };
 const vehiclePaths: Record<string, string> = { vin: "vin", vehicleUse: "primary_use", annualKm: "annual_km", commuteKm: "commute_km" };
 const ownershipPaths: Record<string, string> = { registeredOwner: "registered_owner", ownerAddress: "address", vin: "vin", year: "year", make: "make", model: "model", plate: "plate", lessor: "lessor", lienholder: "lienholder" };
+const habPropertyPaths: Record<string, string[]> = {
+  riskAddress: ["habitational_risk", "risk_address"], policyType: ["habitational_risk", "policy_type"], occupiedSince: ["habitational_risk", "occupied_since"],
+  propertyInsuredSince: ["prior_insurance", "insured_since"], continuouslyInsuredSince: ["prior_insurance", "continuous_insurance"],
+  numberOfMortgages: ["mortgage", "number_of_mortgages"], mortgagee: ["mortgage", "mortgagees", "0", "name"], mortgageeAddress: ["mortgage", "mortgagees", "0", "address"], natureOfInterest: ["mortgage", "nature_of_interest"], lossPayee: ["mortgage", "loss_payees", "0", "name"],
+};
 
 export function reconcileDocumentsIntoCase(current: InsuranceCase, records: UploadedDocumentRecord[]): InsuranceCase {
   const next = applyDocumentPresence(current, records);
@@ -183,6 +188,19 @@ export function reconcileDocumentsIntoCase(current: InsuranceCase, records: Uplo
     if (bucket?.scope.id && bucket.scope.primary && !item.associationReview) {
       if (bucket.scope.type === "CLAIM" && field.startsWith("claim.")) paths.push(["claims", bucket.scope.id, field.slice(6)]);
       if (bucket.scope.type === "POLICY" && policyPaths[field]) paths.push(policyPaths[field]);
+      if (bucket.scope.type === "PROPERTY" && bucket.scope.lob === "HAB" && habPropertyPaths[field]) {
+        if (["numberOfMortgages", "mortgagee", "mortgageeAddress", "natureOfInterest"].includes(field)) next.mortgage ??= { number_of_mortgages: null, mortgagees: [] };
+        if (field === "mortgagee" || field === "mortgageeAddress") {
+          next.mortgage ??= { number_of_mortgages: null, mortgagees: [] };
+          next.mortgage.mortgagees[0] ??= { name: "", address: "" };
+        }
+        if (field === "lossPayee") {
+          next.mortgage ??= { number_of_mortgages: null, mortgagees: [] };
+          next.mortgage.loss_payees ??= [];
+          next.mortgage.loss_payees[0] ??= { name: "", address: "" };
+        }
+        paths.push(habPropertyPaths[field]);
+      }
       if (bucket.scope.type === "DRIVER" && driverPaths[field]) paths.push(["drivers", bucket.scope.id, driverPaths[field]]);
       if (bucket.scope.type === "VEHICLE") {
         const ownership = entries.some(e => e.source.documentType === "OWNERSHIP");
@@ -199,7 +217,7 @@ export function reconcileDocumentsIntoCase(current: InsuranceCase, records: Uplo
     }
     if (resolved !== null && item.status !== "conflict" && !item.associationReview) for (const path of paths) {
       const at = slot(next, path); if (!at || blocked.has(JSON.stringify(path))) continue;
-      const value = ["year", "annualKm", "commuteKm", "premium", "demeritPoints"].includes(field) ? numeric(resolved) : field === "lessor" || field === "lienholder" ? { name: String(resolved), address: "" } : resolved;
+      const value = ["year", "annualKm", "commuteKm", "premium", "demeritPoints", "numberOfMortgages"].includes(field) ? numeric(resolved) : field === "lessor" || field === "lienholder" ? { name: String(resolved), address: "" } : resolved;
       if (manual || priorTargets.some(t => same(t.path, path)) || !nonempty(at.target[at.key]) || same(at.target[at.key], value)) {
         const baseline = old?.appliedTargets?.find(t => same(t.path, path))?.previousValue ?? at.target[at.key] ?? null;
         at.target[at.key] = value;
@@ -237,7 +255,7 @@ export function reconcileDocumentsIntoCase(current: InsuranceCase, records: Uplo
       membershipDecision,
       activeEvidence: { application: ctsac ? [supportId(ctsac)] : [], diploma: diploma ? [supportId(diploma)] : [] },
       withdrawnEvidence: { ...next.group_discount?.withdrawnEvidence, ...(!ctsac && next.group_discount?.ctsac_application ? { ctsac_application: next.group_discount.ctsac_application } : {}), ...(!diploma && next.group_discount?.diploma ? { diploma: next.group_discount.diploma } : {}) },
-      selected: next.group_discount?.selected ?? true,
+      selected: next.group_discount?.selected ?? false,
       association: "CTSAC",
       status: "NEEDS_REVIEW",
       ctsac_application: app ? {
@@ -248,9 +266,11 @@ export function reconcileDocumentsIntoCase(current: InsuranceCase, records: Uplo
     if (membershipDecision && next.group_discount.ctsac_application && !membershipDecision.evidenceReview) next.group_discount.ctsac_application.internal_status = membershipDecision.value;
   }
   next.provenanceWarnings = [...new Set([
-    ...(next.provenanceWarnings ?? []).filter(message => !message.startsWith("Lease status has uncertain") && !message.startsWith("Zero mortgages has uncertain")),
+    ...(next.provenanceWarnings ?? []).filter(message => !message.startsWith("Lease status has uncertain") && !message.startsWith("Zero mortgages has uncertain") && !message.startsWith("Multiple active CTSAC") && !message.startsWith("Multiple active diploma")),
     ...(next.ownership?.leased === false && !next.factConfirmations?.["ownership.leased"]?.confirmed ? ["Lease status has uncertain provenance; confirm the retained value."] : []),
     ...(next.mortgage?.number_of_mortgages === 0 && !next.factConfirmations?.["mortgage.none"]?.confirmed ? ["Zero mortgages has uncertain provenance; confirm the retained value."] : []),
+    ...(apps.length > 1 ? ["Multiple active CTSAC applications require broker review; no applicant was selected automatically."] : []),
+    ...(degrees.length > 1 ? ["Multiple active diploma sources require broker review; no credential was selected automatically."] : []),
   ])];
   return next;
 }

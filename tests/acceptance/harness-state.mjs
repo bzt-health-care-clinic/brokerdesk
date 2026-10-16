@@ -14,3 +14,10 @@ export async function responseDuring(page, predicate, action) {
   const [response] = await Promise.all([waiting, Promise.resolve().then(action)]);
   return response;
 }
+
+/** A noopener window belongs to the context and need not emit page's popup event. */
+export async function newPageDuring(context, action) {
+  const waiting = context.waitForEvent('page');
+  const [opened] = await Promise.all([waiting, Promise.resolve().then(action)]);
+  return opened;
+}

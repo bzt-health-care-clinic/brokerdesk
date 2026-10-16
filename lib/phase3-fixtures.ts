@@ -8,15 +8,15 @@ const completeApplication = { english_name: "Avery Example", chinese_name: "示�
 const matchingDiploma = { holder_name: "AVERY EXAMPLE", university: "Peking University", degree: "Master's", major: "Education", issue_date: "2012-06-30", certificate_number: "PKU-2012-8821", readable: true };
 
 function autoFixture(id: string, label: string, mutate: (item: InsuranceCase) => void): InsuranceCase {
-  const item = clone(base); item.case_id = id; item.label = label; item.policy.company = "Definity"; item.insured.name = "Avery Example"; item.policy.auto_quote_number = item.policy.quote_number; mutate(item); return item;
+  const item = clone(base); item.case_id = id; item.label = label; item.policy.company = "Definity"; item.insured.name = "Avery Example"; item.policy.auto_quote_number = item.policy.quote_number; mutate(item); if (item.group_discount) item.group_discount.selectionConfirmed = true; return item;
 }
 
 export const phase3Cases: InsuranceCase[] = [
   autoFixture("P3-1", "P3·1 Definity · both group docs missing", (item) => { item.group_discount = { selected: true, association: "CTSAC", status: "MISSING_DOCUMENTS" }; }),
   autoFixture("P3-2", "P3·2 Definity · diploma missing", (item) => { item.group_discount = { selected: true, association: "CTSAC", ctsac_application: completeApplication, status: "MISSING_DOCUMENTS" }; }),
-  autoFixture("P3-3", "P3·3 Economical · group validated", (item) => { item.policy.company = "Economical"; item.group_discount = { selected: true, association: "CTSAC", ctsac_application: completeApplication, diploma: matchingDiploma, status: "VALIDATED" }; }),
-  autoFixture("P3-4", "P3·4 Diploma name mismatch", (item) => { item.group_discount = { selected: true, association: "CTSAC", ctsac_application: completeApplication, diploma: { ...matchingDiploma, holder_name: "ZETA, TEST" }, status: "FAILED" }; }),
-  autoFixture("P3-5", "P3·5 CTSAC application unsigned", (item) => { item.group_discount = { selected: true, association: "CTSAC", ctsac_application: { ...completeApplication, applicant_signature: undefined }, diploma: matchingDiploma, status: "NEEDS_REVIEW" }; }),
+  autoFixture("P3-3", "P3·3 Economical · group validated", (item) => { item.policy.company = "Economical"; item.group_discount = { selected: true, association: "CTSAC", ctsac_application: completeApplication, diploma: matchingDiploma, activeEvidence: { application: ["synthetic-ctsac-application"], diploma: ["synthetic-diploma"] }, status: "VALIDATED" }; }),
+  autoFixture("P3-4", "P3·4 Diploma name mismatch", (item) => { item.group_discount = { selected: true, association: "CTSAC", ctsac_application: completeApplication, diploma: { ...matchingDiploma, holder_name: "ZETA, TEST" }, activeEvidence: { application: ["synthetic-ctsac-application"], diploma: ["synthetic-diploma"] }, status: "FAILED" }; }),
+  autoFixture("P3-5", "P3·5 CTSAC application unsigned", (item) => { item.group_discount = { selected: true, association: "CTSAC", ctsac_application: { ...completeApplication, applicant_signature: undefined }, diploma: matchingDiploma, activeEvidence: { application: ["synthetic-ctsac-application"], diploma: ["synthetic-diploma"] }, status: "NEEDS_REVIEW" }; }),
   autoFixture("P3-6", "P3·6 Group discount not selected", (item) => { item.group_discount = { selected: false, association: "CTSAC", status: "NOT_SELECTED" }; }),
   autoFixture("P3-7", "P3·7 Combined package quote numbers", (item) => { item.policy.auto_quote_number = "123456789"; item.policy.hab_quote_number = "987654321"; item.policy.quote_number = "123456789"; }),
   { ...clone(hab), case_id: "P3-8", label: "P3·8 Tenant · no mortgage", case_type: "new_tenant", mortgage: { number_of_mortgages: 0, mortgagees: [], loss_payees: [] }, habitational_risk: { ...hab.habitational_risk!, policy_type: "Tenant", occupied_since: "2024-03-01" }, policy: { ...hab.policy, hab_quote_number: "SYNTH-ID-0001" } },

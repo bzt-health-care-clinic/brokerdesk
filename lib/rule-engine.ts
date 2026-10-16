@@ -34,70 +34,76 @@ const isAuto = (data: InsuranceCase) =>
 const source = (data: InsuranceCase, field: string) =>
   data.field_sources.find((item) => canonicalFieldKey(item.canonicalField ?? item.field) === canonicalFieldKey(field));
 
+function vehicleOwnership(data: InsuranceCase, index: number) {
+  const vehicle = data.vehicles[index];
+  if (vehicle.ownership?.received) return vehicle.ownership;
+  if (data.vehicles.length === 1 && data.ownership?.received) return data.ownership;
+  if (data.ownership?.received && vehicle.vin && norm(data.ownership.vin) === norm(vehicle.vin)
+    && data.vehicles.filter(item => norm(item.vin) === norm(vehicle.vin)).length === 1) return data.ownership;
+  return undefined;
+}
+
+const vehicleLabel = (data: InsuranceCase, index: number) => `vehicle ${index + 1}${data.vehicles[index].vin ? ` (${data.vehicles[index].vin})` : ""}`;
+
 export function checkOwnership(data: InsuranceCase): Alert[] {
   if (!isAuto(data)) return [];
-  if (!data.ownership?.received) {
-    return [
-      alert(
-        "OWNERSHIP_MISSING",
-        "high",
-        "Ownership missing — please provide ownership before completing Auto review.",
-        "ownership",
-      ),
-    ];
-  }
-  return [];
+  if (!data.vehicles.length) return data.ownership?.received ? [] : [alert("OWNERSHIP_MISSING", "high", "Ownership missing — please provide ownership before completing Auto review.", "ownership")];
+  return data.vehicles.flatMap((_, index) => vehicleOwnership(data, index) ? [] : [alert("OWNERSHIP_MISSING", "high", `Ownership missing for ${vehicleLabel(data, index)}.`, `vehicles.${index}.ownership`)]);
 }
 
 export function checkVin(data: InsuranceCase): Alert[] {
-  if (!isAuto(data) || !data.ownership?.received || !data.vehicles[0]) return [];
-  if (norm(data.ownership.vin) === norm(data.vehicles[0].vin)) return [];
-  return [
-    alert(
-      "VIN_MISMATCH",
-      "high",
-      "Ownership VIN does not match application VIN.",
-      "vin",
-      source(data, "vin"),
-    ),
-  ];
+  if (!isAuto(data)) return [];
+  return data.vehicles.flatMap((vehicle, index) => {
+    const permit = vehicleOwnership(data, index); if (!permit) return [];
+    if (vehicle.vin && permit.vin && norm(permit.vin) === norm(vehicle.vin)) return [];
+    return [alert("VIN_MISMATCH", "high", `Ownership VIN is missing or does not match ${vehicleLabel(data, index)}.`, `vehicles.${index}.vin`, source(data, "vin"))];
+  });
 }
 
 export function checkVehicle(data: InsuranceCase): Alert[] {
-  if (!isAuto(data) || !data.ownership?.received || !data.vehicles[0]) return [];
-  const permit = data.ownership;
-  const vehicle = data.vehicles[0];
-  const mismatch =
-    permit.year !== vehicle.year ||
-    norm(permit.make) !== norm(vehicle.make) ||
-    norm(permit.model) !== norm(vehicle.model);
-  return mismatch
-    ? [alert("VEHICLE_MISMATCH", "high", "Ownership vehicle does not match quoted vehicle.", "vehicle", source(data, "vehicle"))]
-    : [];
+  if (!isAuto(data)) return [];
+  return data.vehicles.flatMap((vehicle, index) => {
+    const permit = vehicleOwnership(data, index); if (!permit) return [];
+    const mismatch = !permit.year || !vehicle.year || permit.year !== vehicle.year ||
+      !permit.make || !vehicle.make || norm(permit.make) !== norm(vehicle.make) ||
+      !permit.model || !vehicle.model || norm(permit.model) !== norm(vehicle.model);
+    return mismatch ? [alert("VEHICLE_MISMATCH", "high", `Ownership year/make/model is missing or does not match ${vehicleLabel(data, index)}.`, `vehicles.${index}.vehicle`, source(data, "vehicle"))] : [];
+  });
 }
 
 export function checkNamedInsured(data: InsuranceCase): Alert[] {
-  if (!isAuto(data) || !data.ownership?.received) return [];
-  const owners = [data.ownership.registered_owner, ...(data.ownership.additional_owners ?? [])].map(norm);
-  return owners.includes(norm(data.insured.name))
-    ? []
-    : [alert("OWNER_MISMATCH", "high", `Registered owner is ${data.ownership.registered_owner}, not ${data.insured.name}.`, "registered_owner", source(data, "registered_owner"))];
+  if (!isAuto(data)) return [];
+  const permits = data.vehicles.length ? data.vehicles.map((_, index) => [vehicleOwnership(data, index), index] as const) : [[data.ownership?.received ? data.ownership : undefined, 0] as const];
+  return permits.flatMap(([permit, index]) => {
+    if (!permit) return [];
+    const owners = [permit.registered_owner, ...(permit.additional_owners ?? [])].filter(Boolean).map(norm);
+    return owners.length && data.insured.name && owners.includes(norm(data.insured.name)) ? []
+      : [alert("OWNER_MISMATCH", "high", `Registered owner or named insured is missing or does not match for ${data.vehicles.length ? vehicleLabel(data, index) : "the Ownership source"}.`, `vehicles.${index}.registered_owner`, source(data, "registered_owner"))];
+  });
+}
+
+export function checkOwnershipCompleteness(data: InsuranceCase): Alert[] {
+  if (!isAuto(data)) return [];
+  return data.vehicles.flatMap((_, index) => {
+    const permit = vehicleOwnership(data, index); if (!permit) return [];
+    const label = vehicleLabel(data, index);
+    const findings: Alert[] = [];
+    if (!permit.address) findings.push(alert("EVIDENCE_REVIEW", "high", `Ownership address is not confirmed for ${label}.`, `vehicles.${index}.ownership.address`));
+    if (permit.leased === null || permit.leased === undefined) findings.push(alert("EVIDENCE_REVIEW", "high", `Lease status is unknown for ${label}; do not treat it as no lease.`, `vehicles.${index}.ownership.leased`));
+    if (permit.leased === true && !permit.lessor?.name) findings.push(alert("EVIDENCE_REVIEW", "high", `Lessor is missing for leased ${label}.`, `vehicles.${index}.ownership.lessor`));
+    if (!permit.lienholder?.name && !data.factConfirmations?.[`vehicles.${index}.lienholder.none`]?.confirmed) findings.push(alert("EVIDENCE_REVIEW", "medium", `Lienholder status is unknown for ${label}; confirm none or record the party.`, `vehicles.${index}.ownership.lienholder`));
+    return findings;
+  });
 }
 
 export function checkCoInsured(data: InsuranceCase): Alert[] {
-  if (!isAuto(data) || !data.ownership?.received || data.insured.co_insured.length === 0) return [];
-  const owners = [data.ownership.registered_owner, ...(data.ownership.additional_owners ?? [])].map(norm);
-  return data.insured.co_insured
-    .filter((person) => !owners.includes(norm(person.name)))
-    .map((person) =>
-      alert(
-        "COINSURED_REVIEW",
-        "high",
-        `Co-Insured review required. Ownership and principal driver are ${data.ownership?.registered_owner} only. ${person.name} is listed as co-insured on Auto application. Consider removing co-insured.`,
-        "co_insured",
-        source(data, "co_insured"),
-      ),
-    );
+  if (!isAuto(data) || !data.insured.co_insured.length) return [];
+  return data.vehicles.flatMap((_, index) => {
+    const permit = vehicleOwnership(data, index); if (!permit?.registered_owner) return [];
+    const owners = [permit.registered_owner, ...(permit.additional_owners ?? [])].map(norm);
+    return data.insured.co_insured.filter(person => !owners.includes(norm(person.name))).map(person => alert(
+      "COINSURED_REVIEW", "medium", `Confirm why ${person.name} is jointly named although ${vehicleLabel(data, index)} records only ${permit.registered_owner} as owner.`, `vehicles.${index}.co_insured`, source(data, "co_insured")));
+  });
 }
 
 export function checkLessor(data: InsuranceCase): Alert[] {
@@ -199,7 +205,7 @@ export function checkDocuments(data: InsuranceCase): Alert[] {
 export function runRules(data: InsuranceCase, config: RuleConfig = DEFAULT_RULE_CONFIG, claimReview: ClaimAssessment = assessClaims(data, config)): Alert[] {
   const evidenceAlerts: Alert[] = data.field_sources.filter(field => field.status === "conflict" || field.associationReview || field.evidenceReview).map(field => ({ id: `evidence-${field.field}`, code: field.status === "conflict" ? "SOURCE_CONFLICT" : "EVIDENCE_REVIEW", severity: field.status === "conflict" ? "high" : "medium", message: `${field.canonicalField ?? field.field}: ${field.associationReview ? "subject association not confirmed" : field.evidenceReview ? "supporting evidence changed or withdrawn; broker decision retained for review" : "conflicting active sources"}.`, field: field.field, sourceValues: field.values, resolved: false }));
   evidenceAlerts.push(...(data.provenanceWarnings ?? []).map((message, index): Alert => ({ id: `provenance-${index}`, code: "EVIDENCE_REVIEW", severity: "medium", message, resolved: false })));
-  if (isPolicyChange(data)) return [...runPolicyChangeRules(data), ...checkPremium(data, config), ...evidenceAlerts];
+  if (isPolicyChange(data)) return [...runPolicyChangeRules(data), ...checkCoverage(data), ...checkPremium(data, config), ...evidenceAlerts];
   return [
     ...evidenceAlerts,
     ...checkOwnership(data),
@@ -207,6 +213,7 @@ export function runRules(data: InsuranceCase, config: RuleConfig = DEFAULT_RULE_
     ...checkCoInsured(data),
     ...checkVin(data),
     ...checkVehicle(data),
+    ...checkOwnershipCompleteness(data),
     ...checkLessor(data),
     ...checkPriorPolicy(data),
     ...checkMvr(data),

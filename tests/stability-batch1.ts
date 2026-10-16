@@ -73,7 +73,7 @@ assert.equal(networkCalls, 0);
 
 const app = record("ctsac", "CTSAC_MEMBERSHIP_APPLICATION", { englishName: "Test Person", email: "synthetic.user@example.com", positionTitle: "Engineer", highestDegree: "BSc", university: "Test U", applicantSignature: "Test Person", applicationDate: "2026-09-01", internalStatus: "approved" });
 const diploma = record("degree", "DIPLOMA", { holderName: "Test Person", university: "Test U", degree: "BSc" });
-const group = createBlankAutoCase(); group.policy.company = "Economical"; group.insured.name = "Test Person"; group.group_discount = { selected: true, status: "NEEDS_REVIEW" };
+const group = createBlankAutoCase(); group.policy.company = "Economical"; group.insured.name = "Test Person"; group.group_discount = { selected: true, selectionConfirmed: true, status: "NEEDS_REVIEW" };
 const approved = reconcileDocumentsIntoCase(group, [app, diploma]);
 assert.equal(evaluateGroupDiscount(approved).validation.status, "VALIDATED");
 const withdrawn = removeDocumentFromCase(approved, "degree", [app]);

@@ -9,7 +9,13 @@ import { partitionClaims, runRules } from "../lib/rule-engine.ts";
 const expectedPhase1: Record<string, string | null> = {
   "CASE-A": "OWNER_MISMATCH", "CASE-B": "COINSURED_REVIEW", "CASE-C": "PRIOR_POLICY_ACTIVE", "CASE-D": "CLAIM_MISSING", "CASE-E": null, "CASE-F": "PREMIUM_DISCREPANCY", "CASE-G": "ENDORSEMENT_MISSING", "CASE-H": "PROPERTY_INSURED_SINCE_CONFLICT", "CASE-I": "TELEMATICS_PHONE_MISSING", "CASE-J": "LESSOR_MISMATCH",
 };
-for (const testCase of mockCases) assert.equal(runRules(testCase)[0]?.code ?? null, expectedPhase1[testCase.case_id], `${testCase.case_id} Phase 1 rule regression`);
+for (const testCase of mockCases) {
+  const codes = runRules(testCase).map(alert => alert.code);
+  const expected = expectedPhase1[testCase.case_id];
+  if (expected === null) assert.deepEqual(codes, [], `${testCase.case_id} Phase 1 rule regression`);
+  else assert(codes.some(code => code === expected), `${testCase.case_id}: missing ${expected}; actual ${codes.join(", ")}`);
+  if (testCase.field_sources.some(source => source.status === "conflict")) assert(codes.includes("SOURCE_CONFLICT"), `${testCase.case_id}: legitimate source conflict must remain visible`);
+}
 
 const historicalCase = mockCases.find((item) => item.case_id === "CASE-E")!;
 const split = partitionClaims(historicalCase.claims, new Date("2026-09-14T00:00:00"), 6);
@@ -17,7 +23,7 @@ assert.equal(split.ratingPeriod.length, 2);
 assert.equal(split.historical.length, 1);
 assert.equal(split.historical[0].loss_date, "2016-09-13");
 
-assert.equal(comparePersonNames("ZHANG, JINGJING", "Casey Example"), true);
+assert.equal(comparePersonNames("EXAMPLE, CASEY", "Casey Example"), true);
 assert.equal(comparePersonNames("CASEY EXAMPLE", "JIAKANG GAO"), false);
 assert.equal(compareVins("ZZZTESTA0T0000001", "ZZZ TESTA-0T0000001"), true);
 assert.equal(compareVins("ZZZTESTA0T0000001", "ZZZTESTA0I0000001"), false);

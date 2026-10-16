@@ -44,5 +44,12 @@ caseItem.field_sources = [
 const cleaned = removeDocumentFromCase(caseItem, "ownership", []);
 assert.equal(cleaned.policy.company, "");
 assert.equal(cleaned.ownership?.vin, "");
-assert.equal(cleaned.field_sources.length, 0);
+assert(cleaned.field_sources.every(source => source.values.length === 0 && source.status === "missing"));
+assert.equal(cleaned.field_sources.flatMap(source => source.withdrawnValues ?? []).length, 2);
+const manualCase = structuredClone(caseItem);
+manualCase.field_sources[0] = { ...manualCase.field_sources[0], status: "resolved", resolved_by_user: "Synthetic broker", resolved_value: "Broker-confirmed test value" };
+const manualCleaned = removeDocumentFromCase(manualCase, "ownership", []);
+assert.equal(manualCleaned.field_sources[0].resolved_value, "Broker-confirmed test value");
+assert.equal(manualCleaned.field_sources[0].values.length, 0);
+assert.equal(manualCleaned.field_sources[0].evidenceReview, true);
 console.log("Final stability audit targeted: passed.");

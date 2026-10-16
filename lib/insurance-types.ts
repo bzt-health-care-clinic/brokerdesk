@@ -393,6 +393,7 @@ export type Phase3AlertCode =
   | "DIPLOMA_UNREADABLE"
   | "DIPLOMA_NAME_MISMATCH"
   | "GROUP_DISCOUNT_IDENTITY_UNCONFIRMED"
+  | "GROUP_DISCOUNT_SELECTION_UNCONFIRMED"
   | "GROUP_DISCOUNT_VALIDATED"
   | "MVR_RECEIVED_DATE_MISSING"
   | "REQUIRED_DRIVER_MISSING";
@@ -408,6 +409,7 @@ export interface Alert {
 }
 
 export interface PolicyChange {
+  name_change?: { previous_legal_name: string; requested_legal_name: string; effective_date: string; supporting_document_id?: string; broker_confirmed: boolean };
   requested_action: string;
   vehicle_or_property: string;
   vin?: string;
@@ -432,11 +434,11 @@ export interface PolicyChange {
 }
 
 export type TransactionIntent = "ADD" | "DELETE" | "SUBSTITUTE" | "AMEND" | "RESTORE_COVERAGE" | "REMOVE_COVERAGE" | "DRIVER_ADD" | "DRIVER_DELETE" | "ADDRESS_CHANGE" | "OTHER";
-export type PolicyChangeTransactionType = "VEHICLE_SUBSTITUTION" | "ADD_VEHICLE" | "DELETE_VEHICLE" | "ADD_DRIVER" | "DELETE_DRIVER" | "DRIVER_REASSIGNMENT" | "ADDRESS_CHANGE" | "VEHICLE_USE_CHANGE" | "ANNUAL_KM_CHANGE" | "COMMUTE_CHANGE" | "COVERAGE_CHANGE" | "DEDUCTIBLE_CHANGE" | "LESSOR_CHANGE" | "LIENHOLDER_CHANGE" | "PAYMENT_CHANGE" | "CANCELLATION" | "ENDORSEMENT_CHANGE" | "OPCF16_ADD" | "OPCF16_REMOVE" | "OPCF16_REINSTATE" | "OPCF17_ADD" | "OPCF17_REMOVE" | "OPCF17_REINSTATE" | "OTHER_POLICY_CHANGE";
+export type PolicyChangeTransactionType = "VEHICLE_SUBSTITUTION" | "ADD_VEHICLE" | "DELETE_VEHICLE" | "ADD_DRIVER" | "DELETE_DRIVER" | "DRIVER_REASSIGNMENT" | "NAME_CHANGE" | "ADDRESS_CHANGE" | "VEHICLE_USE_CHANGE" | "ANNUAL_KM_CHANGE" | "COMMUTE_CHANGE" | "COVERAGE_CHANGE" | "DEDUCTIBLE_CHANGE" | "LESSOR_CHANGE" | "LIENHOLDER_CHANGE" | "PAYMENT_CHANGE" | "CANCELLATION" | "ENDORSEMENT_CHANGE" | "OPCF16_ADD" | "OPCF16_REMOVE" | "OPCF16_REINSTATE" | "OPCF17_ADD" | "OPCF17_REMOVE" | "OPCF17_REINSTATE" | "OTHER_POLICY_CHANGE";
 export type UwStatus = "NOT_REQUIRED" | "PENDING" | "REFERRED" | "APPROVED" | "DECLINED";
 export interface PolicyChangeItem { id?: string; type: PolicyChangeTransactionType; field?: string; previous_value?: unknown; new_value?: unknown; effective_date?: string; source?: string; subject_id?: string; subject_name?: string; notes?: string; }
 export interface EndorsementChange { endorsement: string; action: "ADD" | "REMOVE" | "REINSTATE" | "CHANGE"; vehicle?: string; previous_status?: string; new_status?: "REQUESTED" | "ADDED" | "REMOVED" | "REINSTATED" | "DECLINED" | "NOT_ELIGIBLE"; effective_date?: string; requested_by?: string; supporting_document_required?: boolean; uw_status?: UwStatus; reason?: string; }
-export type GroupDiscountValidationStatus = "NOT_APPLICABLE" | "NOT_SELECTED" | "MISSING_DOCUMENTS" | "NEEDS_REVIEW" | "PENDING_MEMBERSHIP" | "VALIDATED" | "FAILED";
+export type GroupDiscountValidationStatus = "NOT_APPLICABLE" | "NOT_CONFIRMED" | "NOT_SELECTED" | "MISSING_DOCUMENTS" | "NEEDS_REVIEW" | "PENDING_MEMBERSHIP" | "VALIDATED" | "FAILED";
 export type IdentityMatchStatus = "MATCH" | "PARTIAL_MATCH" | "CONFLICT" | "NEEDS_CONFIRMATION";
 
 export interface CtsacApplicationData {
@@ -471,6 +473,7 @@ export interface DiplomaData {
 }
 
 export interface GroupDiscountValidation {
+  selectionConfirmed?: boolean;
   membershipDecision?: { value: CtsacApplicationData["internal_status"]; support: string; evidenceReview: boolean };
   activeEvidence?: { application: string[]; diploma: string[] };
   withdrawnEvidence?: { ctsac_application?: CtsacApplicationData; diploma?: DiplomaData };

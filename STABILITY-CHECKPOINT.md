@@ -1,3 +1,15 @@
+# Stability repair checkpoint — comprehensive continuation
+
+## 2026-10-16 continuation (sanitized checkout only)
+
+- Phase 1 IN PROGRESS. PDF.js extraction now retains `hasEOL` row boundaries; bounded inline/next-line label parsing supports the synthetic quote, MVR and DASH fixture layouts. Focused real-PDF.js text test PASS: distinct MVR identities, DASH [1–3]/[4–6], quote effective date and claim rows. Browser/Accept-all verification is NOT RUN after this edit. Vinext's originating `window is not defined` module is still UNKNOWN; the Run 4 overlay stack only identifies its reporter.
+- Acceptance harness popup waits now use context `page` events with rejection attached before the click. Focused harness-state test and syntax PASS. C/D real-browser outcomes remain NOT RUN after this edit.
+- Phase 2 targeted four checks PASS locally under Node 24 with synthetic fixtures: `tests/phase2-regression.ts`, `tests/phase3-regression.ts`, `tests/ocr-space.ts`, `tests/stability-audit.ts`. The checks now preserve source conflicts; supply synthetic active-evidence references; cover uniquely matched versus blank-case Ownership without inventing a vehicle; and distinguish withdrawn active values from retained history/manual decisions. Full regression remains NOT RUN. See `KNOWN-FAILURES.md` for precise limitations.
+- TypeScript `--noEmit --incremental false` PASS after the PDF/acceptance edits (before later Phase 2 edits; rerun required). Batch 2B and Batch 3 IN PROGRESS / NOT VERIFIED. No hosted Actions runs, commit, push, live OCR or public deployment in this continuation.
+- Local Vite startup requires an execution permission beyond the restricted process sandbox because Vite's Windows real-path helper hits `spawn EPERM`; a loopback Vinext server started under the approved escalation. Playwright Chromium is installing into task-local temporary storage for a focused synthetic browser reproduction.
+
+## Historical checkpoint (superseded status; retain for provenance)
+
 # Stability repair checkpoint — Batch 2A
 
 2026-10-15. Batches 1 and 2A implemented. Batch 2B and Batch 3 remain pending. No live cases/files or OCR provider were used for verification. The workspace has no accessible Git metadata.

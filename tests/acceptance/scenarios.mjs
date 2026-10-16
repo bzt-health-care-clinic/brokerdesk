@@ -3,7 +3,7 @@ import { readFile, access } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { api, backend, frontend, expected, fixture, sha, poll } from './runtime.mjs';
-import { acceptedSuggestionsPersisted, responseDuring, selectedCaseMatches } from './harness-state.mjs';
+import { acceptedSuggestionsPersisted, newPageDuring, responseDuring, selectedCaseMatches } from './harness-state.mjs';
 
 export const names = {
   A: 'Case lifecycle and persistence', B: 'Searchable PDF, two drivers, report boundaries',
@@ -97,14 +97,23 @@ export async function runScenario(id, page, rt, result) {
     await card(doc).locator('summary').filter({ hasText: /^Manage sections$/ }).click();
   }
   async function reports(caseId, uploaded, mixed = false) {
-    for (let doc of uploaded) {
-      doc = await acceptSuggestions(caseId, doc);
+    const accepted = [];
+    for (const doc of uploaded) accepted.push(await acceptSuggestions(caseId, doc));
+    await page.getByRole('tab', { name: 'Driver', exact: true }).click();
+    const proposals = page.getByRole('button', { name: /^Confirm driver / });
+    for (let attempts = 0; attempts < 10 && await proposals.count(); attempts++) {
+      const before = (await saved(caseId)).drivers.length;
+      await prompts(() => proposals.first().click(), () => '');
+      await poll(async () => (await saved(caseId)).drivers.length > before, 'broker-confirmed proposed driver persisted');
+    }
+    assert.equal(await proposals.count(), 0, 'Unresolved or ambiguous MVR driver proposals remain visible for review');
+    for (const doc of accepted) {
       for (const section of (doc.logicalDocuments ?? []).filter(s => ['MVR','DASH'].includes(s.documentType))) {
         const c = await saved(caseId);
         const offset = section.documentType === 'MVR' ? (mixed ? section.startPage - 11 : section.startPage - 1) : (mixed ? (section.startPage - 5) / 3 : (section.startPage - 1) / 3);
         const subject = expected.test_subjects[offset];
         const driver = subject && c.drivers.find(d => d.licence_number?.replace(/[^A-Z0-9]/g,'') === subject.licence.replace(/[^A-Z0-9]/g,''));
-        if (!driver) { result.checks.push({ name: `Association UI prerequisite ${section.documentType} page ${section.startPage}`, status: 'FAILED', category: 'usability', error: 'No matching ingested driver and no Auto driver-creation UI; no JSON/API injection used.' }); continue; }
+        if (!driver) { result.checks.push({ name: `Association UI prerequisite ${section.documentType} page ${section.startPage}`, status: 'FAILED', category: 'usability', error: 'No uniquely confirmed driver for the report licence; association remains unassigned.' }); continue; }
         await associate(caseId, doc, section, driver);
       }
     }
@@ -157,7 +166,7 @@ export async function runScenario(id, page, rt, result) {
       // row it must stay unknown; source wording must retain the unknown fact.
       const unknown = c.claims.filter(c => c.party_role === 'FIRST_PARTY' && c.loss_date === '2025-10-10'); assert(unknown.every(c => c.at_fault_percent == null));
       const dash = uploaded.find(d => d.originalFileName === '04_dash_two_reports_text.pdf');
-      assert.match(dash.packagePages.map(p => p.text).join(' '), /first.party.{0,100}(unknown|not (?:provided|specified)|unconfirmed)/i);
+      assert.match(dash.packagePages.map(p => p.text).join(' '), /first.party[\s\S]{0,100}(unknown|not (?:available|provided|specified)|unconfirmed)/i);
       await page.getByRole('tab', { name: 'Claims', exact: true }).click(); assert((await page.locator('.tab-body').innerText()).includes('2017-09-28'));
     }, 'extraction');
     await step('One intended effective date in claim review and summary', async () => { const c = await saved(caseId); assert.equal(c.policy.effective_date, expected.policy_assessment_date); await page.getByRole('tab', { name: 'Claims', exact: true }).click(); assert((await page.locator('.tab-body').innerText()).includes(expected.policy_assessment_date)); await page.getByRole('button', { name: /Start key-in/i }).click(); assert((await page.getByRole('dialog').innerText()).includes(expected.policy_assessment_date)); await page.keyboard.press('Escape'); }, 'extraction');
@@ -165,7 +174,7 @@ export async function runScenario(id, page, rt, result) {
   if (id === 'C') {
     const caseId = await newCase(); const count = rt.calls.length;
     const [scan] = await upload(caseId, ['02_ownership_scan.pdf']);
-    await step('Real PDF.js worker/render to external provider boundary', async () => { assert.equal(rt.calls.length-count, 1); assert(rt.calls[count].width > 600); assert.equal(scan.packagePages[0].extractionProvider, 'ocr_space'); assert.equal(scan.packagePages[0].page, 1); assert(result.workers.some(url => /pdf.*worker/i.test(url)), 'No real PDF worker observed'); await bytesKept(scan, '02_ownership_scan.pdf'); const popup = page.waitForEvent('popup'); await card(scan).getByRole('button', { name: 'Open', exact: true }).click(); const opened = await popup; await opened.waitForLoadState(); assert(opened.url().includes(`/documents/${scan.id}/file`)); await opened.close(); });
+    await step('Real PDF.js worker/render to external provider boundary', async () => { assert.equal(rt.calls.length-count, 1); assert(rt.calls[count].width > 600); assert.equal(scan.packagePages[0].extractionProvider, 'ocr_space'); assert.equal(scan.packagePages[0].page, 1); assert(result.workers.some(url => /pdf.*worker/i.test(url)), 'No real PDF worker observed'); await bytesKept(scan, '02_ownership_scan.pdf'); const opened = await newPageDuring(page.context(), () => card(scan).getByRole('button', { name: 'Open', exact: true }).click()); try { await opened.waitForLoadState(); assert(opened.url().includes(`/documents/${scan.id}/file`)); } finally { await opened.close(); } });
     const mixedCount = rt.calls.length; const [mixed] = await upload(caseId, ['05_mixed_auto_package.pdf']);
     await step('Twelve real pages, only physical page 4 sent to provider', async () => { assert.equal(mixed.packagePages.length, 12); assert.deepEqual(mixed.packagePages.filter(p => p.extractionProvider === 'ocr_space').map(p => p.page), [4]); assert.equal(rt.calls.length-mixedCount, 1); assert.match(rt.calls[mixedCount].name, /-page-4.jpg$/); assert.equal(mixed.packagePages.filter(p => p.extractionProvider === 'embedded_pdf_text').length, 11); await bytesKept(mixed, '05_mixed_auto_package.pdf'); });
     await step('Mixed report sections and physical provenance', async () => { const sections = mixed.suggestedSections?.length ? mixed.suggestedSections : mixed.logicalDocuments; for (const truth of expected.mixed_package_expected_sections.filter(s => ['MVR','DASH_AUTOPLUS'].includes(s.type))) assert(sections.some(s => s.documentType === (truth.type === 'DASH_AUTOPLUS' ? 'DASH' : truth.type) && s.startPage === truth.pages[0] && s.endPage === truth.pages[1])); for (const source of mixed.parsedSources ?? []) for (const e of Object.values(source.fieldEvidence).flat()) if (e.page) assert(e.page >= 1 && e.page <= 12); }, 'extraction');
@@ -207,7 +216,7 @@ export async function runScenario(id, page, rt, result) {
       const response = await responseDuring(page, r => r.url() === `${backend}/documents/${doc.id}/rename`,
         () => prompts(() => card(doc).getByRole('button', { name: 'Rename', exact: true }).click(), () => 'Synthetic combined reviewed.pdf')); assert(response.ok());
       result.restart = await rt.restart(); await page.reload(); doc = (await docs(caseId)).find(d => d.id === doc.id); assert.equal(doc.originalFileName, '05_mixed_auto_package.pdf'); assert.equal(doc.currentFileName, 'Synthetic combined reviewed.pdf'); assert.deepEqual(doc.logicalDocuments.map(s => s.id), siblings); await bytesKept(doc, '05_mixed_auto_package.pdf'); await card(doc).waitFor();
-      const popup = page.waitForEvent('popup'); await card(doc).getByRole('button', { name: 'Open', exact: true }).click(); const opened = await popup; await opened.waitForLoadState(); assert(opened.url().includes(`/documents/${doc.id}/file`)); await opened.close();
+      const opened = await newPageDuring(page.context(), () => card(doc).getByRole('button', { name: 'Open', exact: true }).click()); try { await opened.waitForLoadState(); assert(opened.url().includes(`/documents/${doc.id}/file`)); } finally { await opened.close(); }
     });
   }
   if (id === 'E') {

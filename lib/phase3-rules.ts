@@ -7,8 +7,9 @@ const makeAlert = (data: InsuranceCase, code: Alert["code"], severity: Alert["se
 
 export function evaluateGroupDiscount(data: InsuranceCase): { validation: GroupDiscountValidation; alerts: Alert[] } {
   const carrierRule = carrierRuleFor(data.policy.company);
-  const current = data.group_discount ?? { selected: false, status: carrierRule ? "NOT_SELECTED" : "NOT_APPLICABLE" };
+  const current = data.group_discount ?? { selected: false, status: carrierRule ? "NOT_CONFIRMED" : "NOT_APPLICABLE" };
   if (!carrierRule) return { validation: { ...current, status: "NOT_APPLICABLE" }, alerts: [] };
+  if (!current.selectionConfirmed) return { validation: { ...current, status: "NOT_CONFIRMED" }, alerts: [makeAlert(data, "GROUP_DISCOUNT_SELECTION_UNCONFIRMED", "medium", "Confirm whether the Economical/Definity group discount is selected.", "group_discount.selected")] };
   if (!current.selected) return { validation: { ...current, status: "NOT_SELECTED" }, alerts: [] };
   const alerts: Alert[] = [];
   if (current.membershipDecision?.evidenceReview) alerts.push({ id: "membership-evidence-review", code: "EVIDENCE_REVIEW", severity: "high", message: "Membership decision retained, but its supporting evidence changed or was withdrawn. Review is required.", field: "group_discount.membershipDecision", resolved: false });

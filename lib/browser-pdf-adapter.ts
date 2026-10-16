@@ -1,14 +1,24 @@
 "use client";
 
-import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
+import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?worker&url";
+import workerSource from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?raw";
 import { normalizeOcrText } from "./document-ingestion";
+import { pdfTextLines } from "./pdf-text-lines";
 import type { PdfPageAdapter, PdfPageSource } from "./package-analysis";
 
 let configured = false;
 async function loadBrowserPdfJs() {
   if (typeof window === "undefined") throw new Error("PDF page analysis is available in the browser only.");
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  if (!configured) { pdfjs.GlobalWorkerOptions.workerSrc = workerUrl; configured = true; }
+  if (!configured) {
+    // Vite 8's dev worker route prepends /@vite/client, which reads window in a
+    // Worker global. Use the same Vite-imported worker bytes as a module Blob
+    // in dev; production keeps Vite's emitted worker asset URL.
+    pdfjs.GlobalWorkerOptions.workerSrc = import.meta.env.DEV
+      ? URL.createObjectURL(new Blob([workerSource], { type: "text/javascript" }))
+      : workerUrl;
+    configured = true;
+  }
   return pdfjs;
 }
 
@@ -18,7 +28,7 @@ export class BrowserPdfPageAdapter implements PdfPageAdapter {
     const pdfDocument = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()), useSystemFonts: true }).promise;
     return {
       pageCount: pdfDocument.numPages,
-      async embeddedText(pageNumber) { const page = await pdfDocument.getPage(pageNumber); const content = await page.getTextContent(); return normalizeOcrText(content.items.map((item) => "str" in item ? item.str : "").join(" ")); },
+      async embeddedText(pageNumber) { const page = await pdfDocument.getPage(pageNumber); const content = await page.getTextContent(); return normalizeOcrText(pdfTextLines(content.items.map((item) => "str" in item ? item : {}))); },
       async renderPage(pageNumber, targetBytes) {
         const page = await pdfDocument.getPage(pageNumber); let scale = 2.8; let quality = .88; let output: Blob | null = null;
         for (let attempt = 0; attempt < 5; attempt += 1) {

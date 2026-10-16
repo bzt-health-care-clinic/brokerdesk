@@ -11,6 +11,7 @@ const documents = (ownership = true) => [
 ];
 
 const baseAuto: InsuranceCase = {
+  factConfirmations: { "vehicles.0.lienholder.none": { confirmed: true, by: "Synthetic fixture", at: "2026-09-14" } },
   case_id: "AUTO-2026-0914",
   case_type: "new_auto",
   status: "in_review",
@@ -155,6 +156,7 @@ export const mockCases: InsuranceCase[] = [
   fixture("CASE-G", "G · Missing OPCF 43", (item) => {
     const row = item.coverage.comparison.find((entry) => entry.name === "OPCF 43")!;
     row.portal = "Missing";
+    row.required = true;
     item.case_type = "auto_policy_change";
     item.policy_change = { requested_action: "Restore previous full coverage", vehicle_or_property: "2026 Volvo XC60 Ultra B5 AWD", vin: item.vehicles[0].vin, add: ["All Perils $1,000", "OPCF 20 $3,000", "OPCF 27 $75,000", "OPCF 43"], remove: ["Comprehensive Only"], keep: ["Liability $2M", "Standard Accident Benefits", "Uninsured Automobile", "OPCF 44R"], confirm: [] };
   }),

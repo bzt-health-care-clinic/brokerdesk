@@ -55,14 +55,24 @@ function labelledRecords(text: string, start: RegExp) {
   return matches.map((match, index) => {
     const block = text.slice(match.index!, matches[index + 1]?.index ?? text.length);
     const data: Record<string, unknown> = {};
-    for (const line of block.split("\n")) { const part = line.match(/^\s*([^:]+):\s*(.*)$/); if (part) data[part[1].trim()] = part[2].trim(); }
+    const lines = block.split("\n").map(line => line.trim()).filter(Boolean);
+    const labelSource = "Claim Number|Claim No|Claim ID|Date of Loss|Loss Date|Coverage|Claim Status|Status|Total Loss|Loss Amount|Total Expense|Expense|Expenses|Record Perspective|Party Role|First Party Driver|Third Party Driver|First Party At-Fault|Third Party At-Fault|At Fault Percent|Fault|Description|Offence Date|Conviction Date|Demerit Points|Conviction Description";
+    const labels = new RegExp(`^(?:${labelSource})$`, "i");
+    const inline = new RegExp(`^(${labelSource})[ \\t]+(.+)$`, "i");
+    for (let at = 0; at < lines.length; at++) {
+      const part = lines[at].match(/^([^:]+):\s*(.*)$/);
+      if (part) { data[part[1].trim()] = part[2].trim(); continue; }
+      const paired = lines[at].match(inline);
+      if (paired) { data[paired[1]] = paired[2].trim(); continue; }
+      if (labels.test(lines[at]) && lines[at + 1] && !labels.test(lines[at + 1])) data[lines[at]] = lines[++at];
+    }
     return { data, text: block, offset: match.index! };
   });
 }
 const value = (item: Record<string, unknown>, ...keys: string[]) => keys.map(key => item[key]).find(v => v !== undefined && v !== null && v !== "");
 export function reportNumber(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  const text = String(value ?? "").trim().replace(/^\$/, "").replace(/,/g, "").replace(/%$/, "");
+  const text = String(value ?? "").trim().replace(/^\$/, "").replace(/,/g, "").replace(/(?:\s*CAD|%)$/i, "");
   return /^-?\d+(?:\.\d+)?$/.test(text) ? Number(text) : null;
 }
 
@@ -83,19 +93,21 @@ export function enrichDriverReport(parsed: ParsedSource, raw: RawExtractedDocume
     }
     if (typeof parsed.data.conditions === "string") parsed.data.conditions = /^(none|no restrictions)$/i.test(parsed.data.conditions) ? [] : parsed.data.conditions.split(/;|\|/).map(s => s.trim()).filter(Boolean);
     const json = arrayAfter(text, "Convictions(?: JSON)?");
-    const blocks = labelledRecords(text, /^\s*Conviction(?: Description)?\s*:\s*/gim);
+    const blocks = labelledRecords(text, /^\s*(?:Conviction(?: Description)?\s*:|CONVICTION\s*-[^\n]*)/gim);
     const rows = [...(json ?? []), ...blocks];
-    if (rows.length || json || /^Convictions\s*:\s*(?:none|0)\s*$/im.test(text)) {
+    const explicitZeroConvictions = /^Convictions\s*:\s*(?:none|0)\s*$/im.exec(text)?.[0]
+      ?? /^Number of Convictions(?:[ \t]*:[ \t]*|[ \t]+|[ \t]*\n[ \t]*)0[ \t]*$/im.exec(text)?.[0];
+    if (rows.length || json || explicitZeroConvictions) {
       parsed.data.convictions = rows.map(({ data }) => {
         const item = data && typeof data === "object" ? data as Record<string, unknown> : { description: String(data) };
         return { ...item, description: String(value(item, "description", "Conviction", "Conviction Description") ?? ""), offence_date: value(item, "offence_date", "offenceDate", "Offence Date"), conviction_date: value(item, "conviction_date", "convictionDate", "Conviction Date"), severity: String(value(item, "severity", "Severity") ?? ""), demerit_points: reportNumber(value(item, "demerit_points", "demeritPoints", "Demerit Points")) };
       });
-      parsed.fieldEvidence.convictions = rows.length ? rows.flatMap(row => evidence(raw, row.text, row.offset)) : evidence(raw, text.match(/^Convictions\s*:\s*(?:none|0)\s*$/im)?.[0] ?? "Convictions: []");
+      parsed.fieldEvidence.convictions = rows.length ? rows.flatMap(row => evidence(raw, row.text, row.offset)) : evidence(raw, explicitZeroConvictions ?? "Convictions: []");
     }
   }
   if (parsed.documentType === "DASH") {
     const json = arrayAfter(text, "Claims(?: JSON)?");
-    const blocks = labelledRecords(text, /^\s*Claim(?: Number| No\.?| ID| #)\s*:\s*/gim);
+    const blocks = labelledRecords(text, /^\s*Claim(?: Number| No\.?| ID| #)(?:[ \t]*:[ \t]*|[ \t]+|\n[ \t]*)/gim);
     const rows = [...(json ?? []), ...blocks];
     // A zero-recent summary is never a substitute for the historical detail rows.
     if (json || rows.length) {

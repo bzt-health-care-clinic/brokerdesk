@@ -1,4 +1,15 @@
-# Known failures — initial unverified development snapshot
+# Known failures — targeted recheck 2026-10-16
+
+All four originally documented checks now PASS in the sanitized checkout with Node 24's TypeScript transform. This is targeted regression evidence, not full browser acceptance or production readiness.
+
+| Check | Current targeted status | Resolution / remaining limit |
+|---|---|---|
+| Phase 2 CASE-A | PASS | Assert the required `OWNER_MISMATCH` alert while retaining the earlier legitimate `SOURCE_CONFLICT`; also require conflicts for other conflicting fixtures. A separate sanitized name-permutation assertion was corrected to use one synthetic identity. |
+| Phase 3 P3-3 | PASS | Synthetic fixture now supplies application and diploma active-evidence reference IDs; missing-reference negative fixtures still fail validation. End-to-end source-liveness validation remains part of Batch 2B. |
+| Ownership blank case | PASS | Targeted test now checks both unique VIN-matched vehicle and blank case. Blank case keeps reviewable unassigned owner/VIN facts; it does not create a vehicle or set named insured. Browser presentation still needs acceptance. |
+| Deletion cleanup | PASS | Targeted test asserts no active values remain, withdrawn history remains, and a manual decision remains with an evidence-review flag. It no longer equates total ledger rows with active evidence. |
+
+## Initial snapshot record (historical; findings below have since been retested)
 
 This file records the four targeted regression failures observed in the sanitized copy. These are application/test-integrity findings, not privacy findings. No test was skipped, weakened, or edited to produce a passing result.
 
