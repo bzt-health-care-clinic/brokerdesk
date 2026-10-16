@@ -17,6 +17,8 @@ import { assessClaims, type ClaimAssessment } from "@/lib/claim-assessment";
 import { MvrReview } from "@/components/mvr-review";
 import { confirmedDriverFromProposal, proposedDrivers, type ProposedDriver } from "@/lib/proposed-drivers";
 import { deriveStatus, resolveField, runRules } from "@/lib/rule-engine";
+import { reviewUploadedDocuments } from "@/lib/document-underwriting";
+import { estimateBrokerFee } from "@/lib/monthly-payment";
 import { reconcileDocumentsIntoCase, removeDocumentFromCase } from "@/lib/reconciliation";
 import { getCanonicalInstitution, InstitutionRole } from "@/lib/institution-directory";
 import { carrierRuleFor } from "@/lib/carrier-rules";
@@ -102,7 +104,8 @@ export default function Home() {
   const claims = useMemo(() => assessClaims(caseData, DEFAULT_RULE_CONFIG), [caseData]);
   const groupReview = useMemo(() => evaluateGroupDiscount(caseData), [caseData]);
   const validationStarted = validationHasStarted(caseData);
-  const alerts = useMemo(() => validationHasStarted(caseData) ? [...runRules(caseData, DEFAULT_RULE_CONFIG, claims), ...runPhase3Rules(caseData)] : [], [caseData, claims]);
+  const documentRisk = useMemo(() => reviewUploadedDocuments(caseData, ingestedDocuments), [caseData, ingestedDocuments]);
+  const alerts = useMemo(() => validationHasStarted(caseData) ? [...runRules(caseData, DEFAULT_RULE_CONFIG, claims), ...runPhase3Rules(caseData), ...documentRisk.alerts] : [], [caseData, claims, documentRisk]);
   const baseStatus = deriveStatus(caseData, alerts);
   const status = caseData.status === "keyed" || caseData.status === "incomplete" ? caseData.status : !validationStarted ? "new" : caseData.group_discount?.selected && groupReview.validation.status !== "VALIDATED" ? (groupReview.validation.status === "MISSING_DOCUMENTS" ? "missing_documents" : "needs_confirmation") : baseStatus;
   const manualDecisionCandidates = caseData.field_sources.filter((entry) => entry.values.length > 0);
@@ -392,7 +395,7 @@ export default function Home() {
     setCaseData((current) => ({
       ...current,
       alerts: current.alerts.map((alert) => alert.code === alertCode ? { ...alert, resolved: true, resolution: `Broker override: ${reason.trim()}` } : alert),
-      broker_overrides: [...(current.broker_overrides ?? []), { alert_code: alertCode, reason: reason.trim(), confirmed_by: "Local User", confirmed_at: new Date().toISOString() }],
+      broker_overrides: [...(current.broker_overrides ?? []), { alert_code: alertCode, reason: reason.trim(), confirmed_by: "Local User", confirmed_at: new Date().toISOString(), evidence_fingerprint: documentRisk.fingerprints[alertCode] }],
     }));
     void localRepositories.cases.recordAction(caseData.case_id, "OVERRIDE_BLOCKER", { alertCode, reason: reason.trim() });
   }
@@ -481,7 +484,7 @@ export default function Home() {
       // computed unconditionally so the gate holds even before "Start key-in" was pressed.
       // This covers phase-3 highs such as missing drivers, missing MVR received dates and CTSAC issues.
       // Medium EVIDENCE_REVIEW alerts must not block, or the normal review workflow would deadlock.
-      const blockers = [...runRules(caseData, DEFAULT_RULE_CONFIG, claims), ...runPhase3Rules(caseData)].filter((item) => !item.resolved && item.severity === "high");
+      const blockers = [...runRules(caseData, DEFAULT_RULE_CONFIG, claims), ...runPhase3Rules(caseData), ...documentRisk.alerts].filter((item) => !item.resolved && item.severity === "high");
       const pendingReview = ingestedDocuments.some((record) => record.state === "NEEDS_REVIEW");
       if (blockers.length > 0 || pendingReview) { window.alert("There are unresolved high-severity issues or documents awaiting review. Resolve them before marking complete."); return; }
     }
@@ -668,7 +671,20 @@ function NameChangeSection({ data, onChange }: { data: InsuranceCase; onChange: 
   </div><p>The insured name is not changed automatically. Confirm the requested transaction and supporting evidence before applying it.</p></Section>;
 }
 
-function PaymentView({ data }: { data: InsuranceCase }) { const payment = data.payment; return <Section title="Payment" eyebrow="Last in broker summary"><dl className="key-grid"><KeyValue label="Payment plan" value={payment.plan} strong /><KeyValue label="Annual premium" value={money(payment.annual_premium)} /><KeyValue label="Tax" value={money(payment.tax)} /><KeyValue label="Installment fee" value={money(payment.fees)} /><KeyValue label="Total estimated cost" value={money(payment.total_cost)} /><KeyValue label="Monthly amount" value={money(payment.monthly_amount)} /><KeyValue label="Number of installments" value={payment.number_of_installments} /><KeyValue label="Down payment" value={money(payment.down_payment)} /></dl></Section>; }
+function PaymentView({ data }: { data: InsuranceCase }) {
+  const payment = data.payment;
+  const annual = payment.annual_premium ?? data.premium.quoted_annual;
+  const line = data.case_type === "new_auto" ? "AUTO" : data.case_type === "new_home" ? "HAB" : null;
+  const plan = /month/i.test(payment.plan) ? "monthly" : /annual|year/i.test(payment.plan) ? "annual" : null;
+  const estimate = annual == null || !line || !plan ? null : estimateBrokerFee(annual, line, plan);
+  return <Section title="Payment" eyebrow="Last in broker summary">
+    <dl className="key-grid"><KeyValue label="Payment plan" value={payment.plan} strong /><KeyValue label="Annual premium" value={money(payment.annual_premium)} /><KeyValue label="Tax" value={money(payment.tax)} /><KeyValue label="Installment fee" value={money(payment.fees)} /><KeyValue label="Total estimated cost" value={money(payment.total_cost)} /><KeyValue label="Monthly amount" value={money(payment.monthly_amount)} /><KeyValue label="Number of installments" value={payment.number_of_installments} /><KeyValue label="Down payment" value={money(payment.down_payment)} /></dl>
+    {estimate && <div className="payment-worksheet-estimate"><h3>Broker worksheet estimate (not insurer tariff)</h3>
+      <dl className="key-grid"><KeyValue label="Base annual premium" value={money(estimate.annualPremium)} /><KeyValue label="Tax (auto 0%; home 8%)" value={money(estimate.tax)} /><KeyValue label="Monthly finance charge (auto 1.3%; home 3%)" value={money(estimate.financingFee)} /><KeyValue label="Calculated annual payment cost" value={money(estimate.total)} /><KeyValue label="Calculated monthly payment (12 months)" value={estimate.monthly == null ? "Not applicable" : money(estimate.monthly)} /></dl>
+      <p>Reference estimate from the broker fee workbook; the insurer's approved payment plan, payment schedule and final premium control.</p>
+    </div>}
+  </Section>;
+}
 
 function ReviewGroup({ title, count, tone, children }: { title: string; count: number; tone: string; children: React.ReactNode }) { return <section className={`review-group ${tone}`}><div className="review-title"><h2>{title}</h2><span>{count}</span></div><div className="review-items">{children}</div></section>; }
 function EmptyReview({ label }: { label: string }) { return <div className="empty-review"><CheckCircle2 /> {label}</div>; }
