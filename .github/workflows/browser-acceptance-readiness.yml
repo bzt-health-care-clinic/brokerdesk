@@ -48,6 +48,11 @@ jobs:
       - name: Preflight then A–E (one browser, serial, zero retries)
         timeout-minutes: 18
         run: node tests/browser-acceptance.mjs
+      - name: Pilot Auditor inbox Chromium smoke (synthetic package)
+        timeout-minutes: 7
+        run: |
+          node --experimental-transform-types tests/pilot-browser.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Report missing harness output
         if: always()
         run: |
