@@ -1,0 +1,55 @@
+# BrokerDesk split submission: v1.0 intake acceptance addendum
+**Source of requirements:** BrokerDesk 分体式提交流 Spec (v1.0, 2026-10-16), supplied by the user. This document is a *requirements baseline*, not a claim that each rule is implemented.
+
+## Pilot rollout and authority
+- Start with **one active Auditor** and **one or two pilot Brokers**. Reserve but disable Auditor 2. Later rollout may include five Brokers / two Auditors.
+- Broker local intake -> zero-blocker package -> Broker manually attaches `.bdzip` to email -> Auditor downloads and imports -> authoritative Auditor-side rules -> independent new-business/remarket and policy-change queues -> manual carrier submission.
+- Auditor 1 hosts the canonical SQLite database. A separate LAN-authenticated service with HTTPS is required **before** Auditor 2 can access a shared queue. Never expose the existing unauthenticated loopback API to LAN.
+- Preserve local-first storage. Broker names/licenses/emails roster is deferred until rollout; initial pilot IDs are test-only.
+- `{clientcode}-{yyyymmdd}-{company}-{business_type}.bdzip`; new business `auto`/`home`, policy change `PolicyChangeTransactionType.toLowerCase()`. Distinguish a same-name new revision using `package_id`, `source_case_id`, `revision`. Use manifest `system` for queue routing and warn if filename implies a different type; reject inconsistent manifest-vs-case data.
+- Import always validates physical file SHA-256 and bytes, Broker ID, source document references and performs **fresh Auditor-rule evaluation**. Do not trust the package's `preflight.passed` status. Duplicate package should not create duplicate Case.
+
+## BLOCKER (all applicable requirements must be satisfied before Broker package or Auditor acceptance)
+1. New Auto: every rated vehicle must have an active, correctly matched Ownership document, uniquely tied to VIN and the vehicle. One ownership checklist tick cannot satisfy multiple vehicles.
+2. Add Vehicle / Vehicle Substitution: the specific newly added/replacement vehicle must have its own active VIN-matched Ownership. Unchanged vehicles do not need fresh Ownership on this basis.
+3. Manually verified signed evidence must link to a real active physical file and, if applicable, exact logical section, with matching SHA-256. New Business: signed application; Policy Change: transaction-specific client authorization.
+4. All `required` checklist documents must actually be present, based on the active physical evidence, not a broker-editable received flag alone.
+5. All unresolved HIGH findings from existing underwriting engines and intake-specific checks are blockers, including VIN/Ownership/named insured/co-insured/lessor conflicts; Economical/Definity group/CTSAC missing evidence or identity conflict; zero driver on new Auto. Note: current `COINSURED_REVIEW` is MEDIUM, so a *specific objectively established identity mismatch* needs its own intake BLOCKER without turning every medium into a blocker.
+6. Economical/Definity group discount explicitly confirmed as selected or not selected, never `NOT_CONFIRMED`. No such intake gate for other carriers.
+7. New Business: named insured(s) on **signed application must match quoted named insured(s)**, including number of named insureds. A single-applicant application vs joint-name quote blocks packaging. Source names must come from auditable active documents or a structured, evidence-linked manual comparison; absence of reliable names cannot silently pass.
+8. Policy Change with joint named insureds: verify authorization from **both distinct policyholders**; can be two signatures on one document. Link signer identity and confirmation to the active document/page/section; text extraction showing the words "Signature" or "Yes No" is NOT a signature proof.
+9. Selected OPCF 43: active Bill of Sale OR Lease Agreement evidence must be retained. Apply only when OPCF 43 is actually selected/requested as appropriate, not to every policy.
+10. Requested/signed endorsements requiring client authorization (OPCF 28A, 49, 19, 13C): retain active signed endorsement/support document linked to the corresponding endorsement. Determine need by the actual selected endorsement/transaction, not an arbitrary mention in PDF text.
+11. Cancellation: active signed written cancellation request is mandatory, and joint named policies require both distinct policyholders' signatures.
+12. Claimed discount: evidence for each *actually selected* driver training, student, winter tires, anti-theft or retiree discount. Do not require evidence when the discount is not applied. Do not treat an unrelated document's filename as sufficient; bind active source to vehicle/driver/person where applicable.
+
+## WARN (package allowed; show yellow flags in Auditor inbox)
+- A vehicle **15 years or older** with selected physical damage coverage but without relevant vehicle photos or safety inspection evidence. Need effective-date/year and coverage to evaluate; missing structured data must not be guessed.
+- Quote older than **30 days and not bound**, except **Max: 60 days**. Need reliable quote issuance date, planned bind date/current date, carrier and bind status. Do not assume a missing quote date means the quote is old.
+
+Warnings are included in manifest `preflight.warnings` and *recomputed by the Auditor*; they do not block generation/import. They appear visibly on the corresponding inbox item.
+
+## EXCLUDED from new intake checks (per user)
+- Carrier eligibility/decline rules: driver experience, claims, demerit points, vehicle price/type. Do not add duplicate quote eligibility screening.
+- UW referral pending, other Medium/Low findings as general intake gates.
+- MVR received date as a stand-alone intake issue (if MVR actually present). Existing engine may emit `MVR_RECEIVED_DATE_MISSING` HIGH: intake must explicitly suppress this **specific** item, not silently weaken any unrelated HIGH finding.
+- Landlord package, solid-fuel/oil-tank questionnaires, high-value appraisal, and live weather-event bind prohibition (no live data).
+
+## Current implementation and gaps (snapshot 2026-10-16)
+- **Implemented in Draft PR #3, pending Chromium acceptance:** local Broker/Auditor modes, versioned new-business/policy-change intake profiles, package ZIP+SHA256 export/import, full document bytes, single-Auditor inbox, dual channels, second Auditor disabled, atomic claim, initial signatures and per-VIN Ownership checks.
+- **Not yet implemented**: #7 name-set comparison using application vs quote; #8 and #11 two separate signer attestations; #9 and #10 OPCF-specific supporting source/signature gates; #12 claimed-discount-to-proof mappings; both WARN rules and yellow queue display.
+- Existing v0.3 profile may emit an MVR date HIGH, contrary to this spec. Targeted regression is required.
+- Existing database's document-signature evidence ownership and intake identity fields must be modeled explicitly; raw OCR text must never auto-set signed or signed persons.
+- The pilot Broker allowlist is a self-reported ID and is NOT PKI/nonrepudiation. Official broker roster deferred.
+
+## Small-batch implementation order
+**Batch 0 (this document):** baseline requirements and gap inventory only. No business rule is represented as complete.
+**Batch 1:** fix explicitly excluded MVR-date gate; implement #7 application-vs-quote named-insured set gate and synthetic one-vs-two names tests, including missing/ambiguous evidence.
+**Batch 2:** implement signer-person, active document, page, and hash-linked transaction authorization (#8, #11) with joint cancellation regression and invalidation on evidence edits.
+**Batch 3:** link OPCF 43 Bill of Sale/Lease evidence and specified signed OPCF endorsements (#9, #10); synthetic false-positive and per-vehicle tests.
+**Batch 4:** explicit discount selections and matched proof (#12), warning ages/quotes including Max 60-day exception and yellow Inbox UI.
+**Batch 5:** independent Windows TypeScript/pilot E2E, signed integrity, A–E Chromium and package import/browser smoke at the same HEAD commit. Confirm backup + broker/Auditor manual workflow before real client pilot.
+**Later separate security rollout:** authenticated LAN access and enable Auditor 2 only after explicit authorization and tests.
+
+## Privacy and QA
+Synthetic fixtures only in GitHub/CI. No real client files, IDs, signatures, policy numbers, void cheques, original quote PDFs, or local databases in source control or test artifacts.
