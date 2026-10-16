@@ -82,6 +82,13 @@ export function reviewUploadedDocuments(item: InsuranceCase, records: UploadedDo
     if (multi.length) alerts.push(reviewAlert("MULTILINE_DISCOUNT_SUPPORT_REVIEW", "medium",
       "Auto quote includes a multi-line discount. Confirm eligible matching named insured and the required property-policy proof; never link unrelated insureds."));
   }
+  if (item.case_type === "new_home") {
+    const homeQuoteHasMultiLine = records.some(record =>
+      activeTexts(record).some(page => (page.type === "HAB_QUOTE" || record.documentType === "HAB_QUOTE") &&
+        /multi[-\\s]?line\\s+discount/i.test(page.text)));
+    if (homeQuoteHasMultiLine) alerts.push(reviewAlert("MULTILINE_DISCOUNT_SUPPORT_REVIEW", "medium",
+      "Home quote includes a multi-line discount. Review required matching named insured and eligible auto-policy proof; another customer's auto policy cannot substantiate this discount."));
+  }
   if (item.case_type === "new_home" || item.case_type === "new_auto") {
     for (const record of records) {
       if (!(record.documentType === "HAB_APPLICATION" || record.documentType === "AUTO_APPLICATION" ||
