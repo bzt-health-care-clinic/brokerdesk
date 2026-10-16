@@ -675,13 +675,13 @@ function PaymentView({ data }: { data: InsuranceCase }) {
   const payment = data.payment;
   const annual = payment.annual_premium ?? data.premium.quoted_annual;
   const line = data.case_type === "new_auto" ? "AUTO" : data.case_type === "new_home" ? "HAB" : null;
-  const plan = /month/i.test(payment.plan) ? "monthly" : /annual|year/i.test(payment.plan) ? "annual" : null;
-  const estimate = annual == null || !line || !plan ? null : estimateBrokerFee(annual, line, plan);
+  const annualEstimate = annual == null || !line ? null : estimateBrokerFee(annual, line, "annual");
+  const monthlyEstimate = annual == null || !line ? null : estimateBrokerFee(annual, line, "monthly");
   return <Section title="Payment" eyebrow="Last in broker summary">
     <dl className="key-grid"><KeyValue label="Payment plan" value={payment.plan} strong /><KeyValue label="Annual premium" value={money(payment.annual_premium)} /><KeyValue label="Tax" value={money(payment.tax)} /><KeyValue label="Installment fee" value={money(payment.fees)} /><KeyValue label="Total estimated cost" value={money(payment.total_cost)} /><KeyValue label="Monthly amount" value={money(payment.monthly_amount)} /><KeyValue label="Number of installments" value={payment.number_of_installments} /><KeyValue label="Down payment" value={money(payment.down_payment)} /></dl>
-    {estimate && <div className="payment-worksheet-estimate"><h3>Broker worksheet estimate (not insurer tariff)</h3>
-      <dl className="key-grid"><KeyValue label="Base annual premium" value={money(estimate.annualPremium)} /><KeyValue label="Tax (auto 0%; home 8%)" value={money(estimate.tax)} /><KeyValue label="Monthly finance charge (auto 1.3%; home 3%)" value={money(estimate.financingFee)} /><KeyValue label="Calculated annual payment cost" value={money(estimate.total)} /><KeyValue label="Calculated monthly payment (12 months)" value={estimate.monthly == null ? "Not applicable" : money(estimate.monthly)} /></dl>
-      <p>Reference estimate from the broker fee workbook; the insurer's approved payment plan, payment schedule and final premium control.</p>
+    {annualEstimate && monthlyEstimate && <div className="payment-worksheet-estimate"><h3>Broker worksheet estimate (not insurer tariff)</h3>
+      <dl className="key-grid"><KeyValue label="Base annual premium" value={money(annualEstimate.annualPremium)} /><KeyValue label="Tax (auto 0%; home 8%)" value={money(annualEstimate.tax)} /><KeyValue label="Annual-plan total (no finance fee)" value={money(annualEstimate.total)} /><KeyValue label="Monthly-plan finance fee (auto 1.3%; home 3%)" value={money(monthlyEstimate.financingFee)} /><KeyValue label="Monthly-plan yearly total" value={money(monthlyEstimate.total)} /><KeyValue label="Monthly reference (12 installments)" value={monthlyEstimate.monthly == null ? "Not applicable" : money(monthlyEstimate.monthly)} /></dl>
+      <p>Calculation reference only; select and confirm the insurer payment plan separately. Actual carrier fees, down payment and installment count may differ.</p>
     </div>}
   </Section>;
 }
