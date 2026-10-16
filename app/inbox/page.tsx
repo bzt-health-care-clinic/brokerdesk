@@ -67,6 +67,10 @@ export default function PilotInbox() {
         <div><strong>{task.label || task.insured_name || task.source_case_id}</strong>
           <p>{task.carrier} · {task.broker_name} ({task.broker_id}) · Revision {task.revision}</p>
           <p>Submitted {task.submitted_at?.slice(0,16)} · Effective {task.effective_date || "not specified"}</p>
+          {task.warnings?.length>0&&<div className="pilot-warning-list" aria-label={"Intake warnings for "+task.package_id}>
+            <strong>Warnings ({task.warnings.length}) · package accepted for review</strong>
+            {task.warnings.map((warning,index)=><p key={warning.code+"-"+index}><span>⚠</span> {warning.message}</p>)}
+          </div>}
           <small>Case {task.case_id} · Package {task.package_id}</small>
         </div>
         <div><p><strong>{task.status}</strong>{task.assignee?` · ${task.assignee}`:""}</p>

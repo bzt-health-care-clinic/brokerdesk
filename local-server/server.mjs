@@ -73,6 +73,15 @@ export const server = http.createServer(async (request, response) => {
     const insuredCompare = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/insured-name-comparison$/);
     if (insuredCompare && request.method === "POST") return sendJson(response,request,200,
       repositories.saveNamedInsuredComparison(insuredCompare[1],await readJson(request)));
+    const verifyIntakeProof = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/intake-proof$/);
+    if (verifyIntakeProof && request.method === "POST") return sendJson(response,request,200,
+      repositories.saveIntakeProof(verifyIntakeProof[1],await readJson(request)));
+    const reviewDiscounts = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/discount-review$/);
+    if (reviewDiscounts && request.method === "POST") return sendJson(response,request,200,
+      repositories.saveIntakeDiscountReview(reviewDiscounts[1],await readJson(request)));
+    const reviewWarningFacts = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/warning-facts$/);
+    if (reviewWarningFacts && request.method === "POST") return sendJson(response,request,200,
+      repositories.saveIntakeWarningFacts(reviewWarningFacts[1],await readJson(request)));
     const authorizeChange = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/change-authorization$/);
     if (authorizeChange && request.method === "POST")
       return sendJson(response, request, 200, repositories.saveTransactionAuthorization(authorizeChange[1], await readJson(request)));

@@ -8,6 +8,24 @@ import { inside, safeId, safeRelativePath } from "./paths.mjs";
 const now = () => new Date().toISOString();
 const authorizationKey = "transaction_authorization";
 const namesKey = "named_insured_comparison";
+const proofKeyName = "intake_support_evidence";
+const discountKeyName = "intake_discount_review";
+const warningsKeyName = "intake_warning_facts";
+const supportDocs = {
+  OPCF43:{ "43":["BILL_OF_SALE","LEASE_DOCUMENT"] },
+  SIGNED_OPCF:{ "28A":["OPCF_FORM","POLICY_CHANGE"],"49":["OPCF_FORM","POLICY_CHANGE"],
+    "19":["OPCF_FORM","POLICY_CHANGE"],"13C":["OPCF_FORM","POLICY_CHANGE"] },
+  OLD_VEHICLE:{ "PHYSICAL_DAMAGE":["VEHICLE_PHOTO","SAFETY_INSPECTION"] },
+  DISCOUNT:{ "DRIVER_TRAINING":["DRIVER_TRAINING_CERTIFICATE"],STUDENT:["STUDENT_PROOF"],
+    WINTER_TIRES:["WINTER_TIRE_PROOF"],ANTI_THEFT:["ANTI_THEFT_PROOF"],RETIREE:["RETIREMENT_PROOF"] }
+};
+const discountSubjects={DRIVER_TRAINING:"DRIVER",STUDENT:"DRIVER",WINTER_TIRES:"VEHICLE",ANTI_THEFT:"VEHICLE",RETIREE:"DRIVER"};
+const supportedPeople=item=>(item.drivers??[]).map(d=>String(d.id||d.name||"").trim());
+const supportedVehicles=item=>(item.vehicles??[]).map(v=>String(v.id||v.vin||"").trim());
+const validSubjects=list=>list.every(Boolean)&&new Set(list.map(x=>x.toUpperCase())).size===list.length;
+const isValidDay=text=>typeof text==="string" && /^\d{4}-\d{2}-\d{2}$/.test(text) &&
+  Number.isFinite(Date.parse(text+"T00:00:00Z")) && new Date(text+"T00:00:00Z").toISOString().slice(0,10)===text;
+const supportIdentity=proof=>[proof.purpose,proof.code,proof.subject_key].join("|");
 const normPerson = name => typeof name === "string" ? name.normalize("NFKC").replace(/\s+/g," ").trim().toUpperCase() : "";
 const people = item => [item.insured?.name,...(item.insured?.co_insured??[]).map(p=>p.name)].map(normPerson);
 const matchPeople = (a,b) => Array.isArray(a)&&Array.isArray(b)&&a.length>0&&a.length===b.length&&a.every(Boolean)&&b.every(Boolean)&&new Set(a).size===a.length&&new Set(b).size===b.length&&[...a].sort().every((v,i)=>v===[...b].sort()[i]);
@@ -77,6 +95,13 @@ export class LocalRepositories {
           delete item[namesKey];
           audit(this.db,"INSURED_NAMES_EVIDENCE_INVALID",{caseId:id});
         }
+        for (const prop of [proofKeyName,discountKeyName,warningsKeyName]) {
+          if (stored[prop] === undefined) delete item[prop]; else item[prop] = stored[prop];
+        }
+        if ((item[proofKeyName]??[]).some(proof=>!this.intakeProofStillValid(item,proof))) {
+          item[proofKeyName]=(item[proofKeyName]??[]).filter(proof=>this.intakeProofStillValid(item,proof));
+          audit(this.db,"INTAKE_PROOF_REVOKED",{caseId:id,details:{reason:"case-fields-or-evidence-changed"}});
+        }
         // Authorization is server-owned: JSON import/autosave cannot fabricate it.
         if (stored[authorizationKey] === undefined) delete item[authorizationKey];
         else item[authorizationKey] = stored[authorizationKey];
@@ -89,6 +114,9 @@ export class LocalRepositories {
         item = clearSignature(item);
         delete item[authorizationKey];
         delete item[namesKey];
+        delete item[proofKeyName];
+        delete item[discountKeyName];
+        delete item[warningsKeyName];
       }
       if ((item.case_type === "new_auto" || item.case_type === "new_home") && item.status === "keyed" && !item.signed) {
         throw signatureError("Signed application verification is required before marking this case KEYED.");
@@ -213,6 +241,117 @@ export class LocalRepositories {
       this.db.exec("COMMIT");return this.getCase(caseId);
     }catch(e){this.db.exec("ROLLBACK");throw e}
   }
+  intakeProofStillValid(item,proof) {
+    const types=supportDocs[proof?.purpose]?.[proof?.code];
+    if (!types || !proof?.verified_at || !proof?.verified_by || !proof.subject_key) return false;
+    const vehicleKeys=supportedVehicles(item),driverKeys=supportedPeople(item);
+    const targets=proof.purpose==="DISCOUNT" && discountSubjects[proof.code]==="DRIVER"?driverKeys:vehicleKeys;
+    if (!validSubjects(targets) || !targets.includes(proof.subject_key)) return false;
+    const ref=this.evidenceReference(item,proof.document_id,proof.logical_document_id,types);
+    if (!ref || ref.hash!==proof.source_sha256 || ref.type!==proof.document_type ||
+      ref.logicalDocumentId!==proof.logical_document_id ||
+      ref.startPage!==proof.start_page || ref.endPage!==proof.end_page) return false;
+    if (proof.purpose!=="SIGNED_OPCF") return true;
+    const people= [item.insured?.name,...(item.insured?.co_insured??[]).map(p=>p.name)].map(normPerson);
+    return Boolean(ref.logicalDocumentId && Number.isInteger(proof.signature_page) &&
+      Number.isInteger(ref.startPage)&&Number.isInteger(ref.endPage) &&
+      proof.signature_page>=ref.startPage && proof.signature_page<=ref.endPage &&
+      people.includes(normPerson(proof.signer_name)) && normPerson(proof.signer_name));
+  }
+  saveIntakeProof(caseId,request,actor="Local Broker") {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const item=this.getCase(safeId(caseId)); if(!item)throw signatureError("Case not found.",404);
+      const purpose=String(request?.purpose??""),code=String(request?.code??"").toUpperCase(),
+        subject=String(request?.subjectKey??"").trim(),types=supportDocs[purpose]?.[code];
+      if(!types || !subject || !validSubjects(supportedVehicles(item)) ||
+        !validSubjects(supportedPeople(item))) throw signatureError("Invalid evidence purpose or ambiguous insured subject.",400);
+      const identity=purpose+"|"+code+"|"+subject;
+      const before=item.intake_support_evidence??[];
+      const next={...item,intake_support_evidence:before.filter(p=>supportIdentity(p)!==identity)};
+      if(request.action==="verify") {
+        const target=purpose==="DISCOUNT"&&discountSubjects[code]==="DRIVER"?
+          supportedPeople(item):supportedVehicles(item);
+        if(!target.includes(subject))throw signatureError("Evidence must match an active vehicle or driver.",400);
+        if(request.confirmed!==true)throw signatureError("Broker must explicitly verify the supporting document.",400);
+        const ref=this.evidenceReference(item,request.documentId,request.logicalDocumentId,types);
+        if(!ref || !ref.logicalDocumentId)throw signatureError("Select an active, hashed and classified document section.",409);
+        if (next.intake_support_evidence.some(p=>p.purpose===purpose&&p.code===code&&
+          p.document_id===ref.documentId&&p.logical_document_id===ref.logicalDocumentId&&
+          p.subject_key!==subject))
+          throw signatureError("One document section cannot prove the same endorsement or discount for different subjects.",409);
+        const proof={
+          purpose,code,subject_key:subject,document_id:ref.documentId,
+          logical_document_id:ref.logicalDocumentId,document_type:ref.type,source_sha256:ref.hash,
+          start_page:ref.startPage,end_page:ref.endPage,verified_at:now(),verified_by:actor
+        };
+        if(purpose==="SIGNED_OPCF"){
+          const name=String(request.signerName??"").trim(),page=request.signaturePage;
+          const allowed=[item.insured?.name,...(item.insured?.co_insured??[]).map(p=>p.name)].map(normPerson);
+          if(!allowed.includes(normPerson(name))||!name||!Number.isInteger(page)||
+            !Number.isInteger(ref.startPage)||!Number.isInteger(ref.endPage)||
+            page<ref.startPage||page>ref.endPage)
+            throw signatureError("Signed OPCF needs the named policyholder's manually confirmed signature page.",409);
+          proof.signer_name=name;proof.signature_page=page;
+        }
+        next.intake_support_evidence.push(proof);
+      } else if(request.action!=="revoke")throw signatureError("Unknown evidence action.",400);
+      this.upsertCase({case:next},"UPDATE_CASE",{trustedSignature:true});
+      audit(this.db,request.action==="verify"?"INTAKE_PROOF_VERIFIED":"INTAKE_PROOF_REVOKED",{
+        caseId,documentId:request.documentId??null,details:{purpose,code,subject,actor}});
+      this.db.exec("COMMIT");return this.getCase(caseId);
+    }catch(e){this.db.exec("ROLLBACK");throw e}
+  }
+  saveIntakeDiscountReview(caseId,request,actor="Local Broker") {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const item=this.getCase(safeId(caseId));if(!item)throw signatureError("Case not found.",404);
+      if(!["new_auto","auto_policy_change"].includes(item.case_type))
+        throw signatureError("Discount review is for Auto submissions.",400);
+      const input=request?.selections;
+      if(!Array.isArray(input)||input.length>60)throw signatureError("Discount selections must be an array.",400);
+      const selections=[],seen=new Set();
+      for(const entry of input){
+        const kind=String(entry?.kind??""),key=String(entry?.subject_key??"").trim();
+        const targetType=discountSubjects[kind];
+        if(!targetType)throw signatureError("Unknown discount category.",400);
+        const available=targetType==="DRIVER"?supportedPeople(item):supportedVehicles(item);
+        if(!validSubjects(available)||!available.includes(key)||seen.has(kind+"|"+key))
+          throw signatureError("Discount must refer to one distinct current driver or vehicle.",409);
+        seen.add(kind+"|"+key);selections.push({kind,subject_key:key});
+      }
+      const next={...item,intake_discount_review:{reviewed_at:now(),reviewed_by:actor,selections}};
+      this.upsertCase({case:next},"UPDATE_CASE",{trustedSignature:true});
+      audit(this.db,"INTAKE_DISCOUNTS_REVIEWED",{caseId,details:{actor,selections}});
+      this.db.exec("COMMIT");return this.getCase(caseId);
+    }catch(e){this.db.exec("ROLLBACK");throw e}
+  }
+  saveIntakeWarningFacts(caseId,facts,actor="Local Broker") {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const item=this.getCase(safeId(caseId));if(!item)throw signatureError("Case not found.",404);
+      const issue=String(facts?.quote_issued_date??""),planned=String(facts?.planned_bind_date??"");
+      if((issue&&!isValidDay(issue))||(planned&&!isValidDay(planned))||
+        ![true,false,undefined].includes(facts?.quote_bound))
+        throw signatureError("Quote dates and bound status must be explicitly valid.",400);
+      const damaged=facts?.vehicle_physical_damage??[];
+      if(!Array.isArray(damaged)||damaged.length>50)throw signatureError("Vehicle coverages must be an array.",400);
+      const vehicles=supportedVehicles(item),seen=new Set();
+      for(const entry of damaged){
+        if(!vehicles.includes(entry?.vehicle_key)||seen.has(entry.vehicle_key)||
+          typeof entry.selected!=="boolean")throw signatureError("Physical Damage selection must match a unique vehicle.",400);
+        seen.add(entry.vehicle_key);
+      }
+      const next={...item,intake_warning_facts:{
+        ...(issue?{quote_issued_date:issue}:{}),...(planned?{planned_bind_date:planned}:{}),
+        ...(facts.quote_bound===undefined?{}:{quote_bound:facts.quote_bound}),
+        vehicle_physical_damage:damaged.map(p=>({vehicle_key:p.vehicle_key,selected:p.selected}))
+      }};
+      this.upsertCase({case:next},"UPDATE_CASE",{trustedSignature:true});
+      audit(this.db,"INTAKE_WARNING_FACTS_CONFIRMED",{caseId,details:{actor,vehicle_count:damaged.length}});
+      this.db.exec("COMMIT");return this.getCase(caseId);
+    }catch(e){this.db.exec("ROLLBACK");throw e}
+  }
   transactionAuthorizationReference(item, documentId, logicalDocumentId) {
     if (!["auto_policy_change", "home_policy_change"].includes(item.case_type)) return null;
     if (!documentId) return null;
@@ -311,6 +450,15 @@ export class LocalRepositories {
       item = this.getCase(caseId); // do not re-save a withdrawn authorization
     }
     if(item?.named_insured_comparison&&!this.namedInsuredComparisonStillValid(item)){const next={...item};delete next.named_insured_comparison;this.upsertCase({case:next},"UPDATE_CASE",{trustedSignature:true});audit(this.db,"INSURED_NAMES_EVIDENCE_WITHDRAWN",{caseId,details:{reason}});item=this.getCase(caseId)}
+    if(item?.intake_support_evidence?.length){
+      const live=item.intake_support_evidence.filter(proof=>this.intakeProofStillValid(item,proof));
+      if(live.length!==item.intake_support_evidence.length){
+        const next={...item,intake_support_evidence:live};
+        this.upsertCase({case:next},"UPDATE_CASE",{trustedSignature:true});
+        audit(this.db,"INTAKE_PROOF_WITHDRAWN",{caseId,details:{reason,removed:item.intake_support_evidence.length-live.length}});
+        item=this.getCase(caseId);
+      }
+    }
     if (!item?.signed || this.signedEvidenceStillValid(item)) return revokedAuthorization;
     const cleared = clearSignature(item);
     this.upsertCase({ case: cleared }, "UPDATE_CASE", { trustedSignature: true });

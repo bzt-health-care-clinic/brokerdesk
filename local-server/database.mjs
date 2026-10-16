@@ -59,7 +59,7 @@ export function openDatabase(path) {
       package_id TEXT PRIMARY KEY REFERENCES imported_packages(package_id) ON DELETE CASCADE,
       status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_progress','completed')),
       assignee TEXT, lease_until TEXT, claim_version INTEGER NOT NULL DEFAULT 0,
-      effective_date TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL
+      effective_date TEXT NOT NULL DEFAULT '', warnings_json TEXT NOT NULL DEFAULT '[]', updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS pilot_auditors (
       id TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
@@ -75,6 +75,8 @@ export function openDatabase(path) {
     CREATE INDEX IF NOT EXISTS idx_audit_case ON audit_events(case_id, created_at);
     PRAGMA optimize;
   `);
+  if (!db.prepare("PRAGMA table_info(inbox_tasks)").all().some(column => column.name === "warnings_json"))
+    db.exec("ALTER TABLE inbox_tasks ADD COLUMN warnings_json TEXT NOT NULL DEFAULT '[]'");
   if (!db.prepare("PRAGMA table_info(logical_documents)").all().some(column => column.name === "subject_id")) db.exec("ALTER TABLE logical_documents ADD COLUMN subject_id TEXT");
   if (!db.prepare("PRAGMA table_info(logical_documents)").all().some(column => column.name === "document_subtype")) {
     db.exec("ALTER TABLE logical_documents ADD COLUMN document_subtype TEXT");

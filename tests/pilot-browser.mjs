@@ -74,6 +74,7 @@ try {
     applicationDocumentId:"UISIGNED",applicationLogicalDocumentId:"UISIGNEDSEC",
     quoteDocumentId:"UIQUOTE",quoteLogicalDocumentId:"UIQUOTESEC",
     applicationNames:["SYNTHETIC PILOT CLIENT"],quoteNames:["SYNTHETIC PILOT CLIENT"]});
+  repo.saveIntakeWarningFacts(home.case_id,{quote_issued_date:"2023-08-10",quote_bound:false});
   const bundle=pilot.exportCase(home.case_id,{id:"PILOT-BROKER-1",name:"Pilot Broker One"});
 
   const { chromium }=await import("playwright");
@@ -120,6 +121,7 @@ try {
     assert.equal(result.imported,true,"UI import must create the submitted Case");
     assert.equal(result.system,"new-business","Manifest must route into New Business inbox");
     await page.getByText(/Imported .* Routed into new-business/).waitFor({timeout:20000});
+    await page.getByText(/Warnings \(1\)/).first().waitFor({timeout:20000});
   } catch(error) {
     console.error("PILOT_BROWSER_IMPORT_DEBUG: "+String(error));
     console.error("PILOT_BROWSER_UI_TEXT: "+(await page.locator("body").innerText().catch(()=>"unavailable")).slice(0,3500));

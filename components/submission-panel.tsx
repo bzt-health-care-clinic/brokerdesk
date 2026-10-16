@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { IntakeSupportPanel } from "@/components/intake-support-panel";
 import type { InsuranceCase } from "@/lib/insurance-types";
 import type { UploadedDocumentRecord } from "@/lib/extraction-types";
 import type { IntakeResult } from "@/lib/intake-profile";
@@ -100,7 +101,6 @@ export function SubmissionPanel({data,records,saveState,onCaseSaved,onNavigate}:
     if(verified&&!selected){setMessage("Upload and classify an authorized, signed change form first.");return;}
     if(verified&&!window.confirm("Have you opened the source and visually verified the client's authorization for this exact policy change?"))
       return;
-    setBusy(true);
     const signers=verified&&mustConfirmSigners?policyholders.map(name=>{
       const selectedSigner=options.find(o=>o.id===signerEvidence[name])??selected;
       return {name,documentId:selectedSigner?.documentId??"",logicalDocumentId:selectedSigner?.logicalId,
@@ -109,6 +109,7 @@ export function SubmissionPanel({data,records,saveState,onCaseSaved,onNavigate}:
     if(verified&&mustConfirmSigners&&(!signers?.length||signers.some(s=>!s.verified||!Number.isInteger(s.signaturePage)||s.signaturePage<1))){
       setMessage("Confirm each policyholder's actual signature and enter the exact document page for each signer.");return;
     }
+    setBusy(true);
     try { const next=await pilotAuthorize(data.case_id,{verified,documentId:selected?.documentId,logicalDocumentId:selected?.logicalId,signers});
       onCaseSaved(next);setMessage(verified?"Change authorization recorded with the original evidence hash.":"Change authorization revoked.");
     } catch(e){setMessage(e instanceof Error?e.message:"Could not verify change authorization.");}
@@ -172,10 +173,13 @@ export function SubmissionPanel({data,records,saveState,onCaseSaved,onNavigate}:
           </div>}
           <Button variant="outline" size="sm" disabled={busy||!options.length} onClick={()=>void confirmAuthorization(true)}>Verify authorization</Button></>}
     </div>}
+    <IntakeSupportPanel data={data} records={records} onCaseSaved={onCaseSaved}/>
     <div className="pilot-preflight-control">
       <Button size="sm" variant="outline" disabled={busy||saveState!=="saved"}
         onClick={()=>void runPreflight()}>Run intake preflight</Button>
       {preflight&&<p role="status"><strong>{preflight.passed?"Passed":"Blocked"}</strong> · {preflight.blockers.length} blocker(s) · {preflight.system}</p>}
+      {preflight?.warnings?.length>0&&<p className="pilot-warning-head">Warnings ({preflight.warnings.length}) · submission is allowed if blockers are zero.</p>}
+      {preflight?.warnings?.map((warning,i)=><div key={warning.code+"-"+i} className="pilot-preflight-warning" role="status"><strong>{warning.code}</strong> {warning.message}</div>)}
       {preflight?.blockers.map((b,i)=><div key={i} className="pilot-preflight-issue">
         <strong>{b.code}</strong> {b.message}
         {b.field&&<button type="button" onClick={()=>onNavigate(b.field!)}>Go to field / document</button>}

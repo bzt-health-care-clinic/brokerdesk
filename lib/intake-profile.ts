@@ -8,9 +8,10 @@ import { isSignedEvidenceStillValid } from "./signed-verification.ts";
 import { isPolicyChange, normalizePolicyChangeTransactions } from "./policy-change.ts";
 import { changeSignersValid, insuredPersonNames, isCancellationChange, nameComparisonEvidenceValid, requiresSeparateSigners, sameNamedPersons } from "./intake-person-evidence.ts";
 import type { ChangeSignerAttestation } from "./intake-person-evidence.ts";
+import { checkDiscountSupport, checkOpcfSupport, evaluateIntakeWarnings } from "./intake-support-evidence.ts";
 
-export const INTAKE_PROFILE_VERSION = { "new-business": "new-business-v1.1", "policy-change": "policy-change-v1.1" } as const;
-export const INTAKE_RULE_ENGINE_VERSION = "brokerdesk-rules-20261016-names-signers";
+export const INTAKE_PROFILE_VERSION = { "new-business": "new-business-v1.2", "policy-change": "policy-change-v1.2" } as const;
+export const INTAKE_RULE_ENGINE_VERSION = "brokerdesk-rules-20261016-full-v1";
 export type IntakeSystem = "new-business" | "policy-change";
 export interface IntakeFinding { code: string; message: string; field?: string; document_id?: string; vehicle_id?: string }
 export interface IntakeResult {
@@ -164,6 +165,10 @@ export function evaluateIntakeProfile(
     }
   }
 
+  // Selected OPCFs and claimed discounts are never inferred from OCR text or file names.
+  for (const issue of [...checkOpcfSupport(item,records),...checkDiscountSupport(item,records)])
+    push(issue.code,issue.message,issue.field,issue.vehicle_id,issue.document_id);
+
   if (/\b(?:economical|definity)\b/i.test(item.policy.company) && !item.group_discount?.selectionConfirmed)
     push("INTAKE_ECONOMICAL_GROUP_UNCONFIRMED",
       "Economical/Definity group discount selection must be explicitly confirmed, including No.",
@@ -172,6 +177,7 @@ export function evaluateIntakeProfile(
   // De-duplicate overlapping High findings emitted by reused rules and the
   // submission-specific layer, while keeping per-vehicle references distinct.
   const unique = new Map(findings.map(f => [`${f.code}|${f.field ?? ""}|${f.vehicle_id ?? ""}`, f]));
+  const warnings = evaluateIntakeWarnings(item,records);
   return { passed: unique.size === 0, system, profile_version: INTAKE_PROFILE_VERSION[system],
-    rule_engine_version: INTAKE_RULE_ENGINE_VERSION, blockers: [...unique.values()], warnings: [] };
+    rule_engine_version: INTAKE_RULE_ENGINE_VERSION, blockers: [...unique.values()], warnings };
 }

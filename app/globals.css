@@ -182,3 +182,14 @@ button,a,input,textarea,[role="button"],[tabindex] { -webkit-tap-highlight-color
 .pilot-preflight-issue button { display:block; margin-top:3px; font-size:.75rem; text-decoration:underline; }
 .pilot-submission-panel button:disabled, .pilot-task button:disabled { opacity:.4; cursor:not-allowed; }
 @media (max-width:800px) { .pilot-inbox-head,.pilot-task { flex-direction:column; }.pilot-inbox { padding:20px 12px; } }
+
+/* Non-blocking Broker and Auditor intake WARN indicators */
+.pilot-warning-list,.pilot-preflight-warning {background:#fff4d2;color:#473500;border:1px solid #d4a83a;border-radius:8px;padding:10px 12px;margin-block:8px;}
+.pilot-warning-list strong,.pilot-warning-head {color:#785000;font-weight:700;}
+.pilot-warning-list p {color:#473500;opacity:1;font-size:.85rem;margin:5px 0;}
+.pilot-intake-support {display:grid;gap:8px;}
+.pilot-proof-row {padding:10px;border:1px solid var(--border,#a4afb8);border-radius:8px;display:grid;gap:8px;}
+.pilot-proof-fields {display:grid;gap:8px;}
+.pilot-intake-support input:not([type=checkbox]),.pilot-intake-support select,.pilot-auth-control textarea,.pilot-auth-control input:not([type=checkbox]) {min-height:35px;width:100%;padding:6px 8px;border:1px solid #9da6ae;border-radius:7px;background:var(--background,white);color:var(--foreground,#172631);}
+.pilot-intake-support label.pilot-check-label {display:flex;align-items:center;gap:8px;font-weight:450;}
+.pilot-proof-fields a {text-decoration:underline;font-size:.85rem;}

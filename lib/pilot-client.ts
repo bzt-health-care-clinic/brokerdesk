@@ -1,5 +1,6 @@
 import type { IntakeResult, ChangeAuthorization } from "./intake-profile.ts";
 import type { InsuranceCase } from "./insurance-types.ts";
+import type { DiscountKind, IntakeWarningFacts, SupportPurpose, SelectedDiscount } from "./intake-support-evidence.ts";
 
 export interface BrokerIdentity { id: string; name: string }
 export interface InboxCase {
@@ -8,6 +9,7 @@ export interface InboxCase {
   submitted_at: string; imported_at: string; label: string; insured_name: string;
   carrier: string; status: "pending" | "in_progress" | "completed";
   assignee: string | null; lease_until: string | null; effective_date: string;
+  warnings: Array<{code:string;message:string;field?:string;vehicle_id?:string}>;
 }
 const API = process.env.NEXT_PUBLIC_BROKERDESK_LOCAL_API_URL ?? "http://127.0.0.1:47831";
 async function checked(response: Response) {
@@ -49,6 +51,24 @@ export async function pilotAuthorize(id: string,
   }>; }): Promise<InsuranceCase> {
   const response = await checked(await fetch(`${API}/cases/${encodeURIComponent(id)}/change-authorization`,{
     method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(request)}));
+  return response.json();
+}
+export async function pilotSupportProof(id:string,request:{
+  action:"verify"|"revoke";purpose:SupportPurpose;code:string;subjectKey:string;confirmed?:boolean;
+  documentId?:string;logicalDocumentId?:string;signaturePage?:number;signerName?:string;
+}):Promise<InsuranceCase>{
+  const response=await checked(await fetch(API+"/cases/"+encodeURIComponent(id)+"/intake-proof",{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(request)}));
+  return response.json();
+}
+export async function pilotDiscountReview(id:string,selections:SelectedDiscount[]):Promise<InsuranceCase>{
+  const response=await checked(await fetch(API+"/cases/"+encodeURIComponent(id)+"/discount-review",{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({selections})}));
+  return response.json();
+}
+export async function pilotWarningFacts(id:string,facts:IntakeWarningFacts):Promise<InsuranceCase>{
+  const response=await checked(await fetch(API+"/cases/"+encodeURIComponent(id)+"/warning-facts",{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(facts)}));
   return response.json();
 }
 export async function pilotImport(file: File) {

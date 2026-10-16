@@ -100,10 +100,13 @@ try {
   repo.saveNamedInsuredComparison(home.case_id,comparison);
   assert(!evaluateIntakeProfile(repo.getCase(home.case_id),repo.listDocuments(home.case_id)).blockers.some(b=>b.code.startsWith("INTAKE_INSURED_NAME")));
 
+  // Quote-age warnings are non-blocking, manifest-embedded and freshly recalculated by Auditor.
+  repo.saveIntakeWarningFacts(home.case_id,{quote_issued_date:"2023-08-10",quote_bound:false});
   const original=pilot.exportCase(home.case_id,{id:"PILOT-BROKER-1",name:"Synthetic Broker One"});
   assert.match(original.filename,/^SYNH01-\d{8}-Pembridge-home\.bdzip$/);
   assert.equal(original.manifest.system,"new-business");
   assert.equal(original.manifest.preflight.passed,true);
+  assert(original.manifest.preflight.warnings.some(w=>w.code==="INTAKE_QUOTE_AGE"));
   const unpacked=readBdzip(original.archive);
   assert(unpacked.has("case.json")); assert(unpacked.has("document-records.json"));
   assert.equal([...unpacked.keys()].filter(p=>p.startsWith("documents/")).length,2);
@@ -115,6 +118,7 @@ try {
   assert(repo.signedEvidenceStillValid(received));
   assert.equal(repo.listDocuments(imported.case_id).length,2);
   assert.equal(pilot.listInbox("new-business").length,1);
+  assert(pilot.listInbox("new-business")[0].warnings.some(w=>w.code==="INTAKE_QUOTE_AGE"));
   assert.equal(pilot.listInbox("policy-change").length,0);
   const duplicate=pilot.importArchive(original.archive,original.filename);
   assert.equal(duplicate.duplicate,true);

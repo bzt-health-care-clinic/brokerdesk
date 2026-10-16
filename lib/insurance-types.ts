@@ -541,6 +541,12 @@ export interface InsuranceCase {
   transaction_authorization?: import("./intake-profile.ts").ChangeAuthorization;
   /** Manual comparison, bound to the exact signed application and Quote evidence. */
   named_insured_comparison?: import("./intake-person-evidence.ts").InsuredNameComparison;
+  /** Server-verified evidence confirmations; an ordinary Case JSON save cannot forge these. */
+  intake_support_evidence?: import("./intake-support-evidence.ts").IntakeSupportProof[];
+  /** Explicitly reviewed discounts actually selected on the quote/policy. */
+  intake_discount_review?: import("./intake-support-evidence.ts").DiscountSelectionReview;
+  /** Manually confirmed quote/coverage facts needed to emit non-blocking yellow warnings. */
+  intake_warning_facts?: import("./intake-support-evidence.ts").IntakeWarningFacts;
   field_sources: FieldSource[];
   documents: CaseDocument[];
   alerts: Alert[];

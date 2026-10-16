@@ -96,11 +96,14 @@ export class SubmissionPilotService {
       transaction_types: transactions,
       files: payloads.map(file => ({ path: file.path, sha256: hash(file.bytes), bytes: file.bytes.length,
         ...(file.document_id ? { document_id: file.document_id } : {}) })),
-      preflight: { passed: true, blockers: [], warnings: [] },
+      preflight: { passed: true, blockers: [], warnings: preflight.warnings },
       signed: { verified: Boolean(item.signed), verified_at: item.signed_verified_at ?? null,
         document_id: item.signed_document_id ?? null, logical_document_id: item.signed_logical_document_id ?? null },
       transaction_authorization: item.transaction_authorization ?? null,
       named_insured_comparison: item.named_insured_comparison ?? null,
+      intake_support_evidence: item.intake_support_evidence ?? [],
+      intake_discount_review: item.intake_discount_review ?? null,
+      intake_warning_facts: item.intake_warning_facts ?? null,
     };
     const archive = createBdzip([...payloads, { path: "manifest.json", bytes: json(manifest) }]);
     this.db.prepare("INSERT INTO outbound_submissions(package_id,case_id,revision,sha256,filename,created_at) VALUES(?,?,?,?,?,?)")
@@ -145,6 +148,11 @@ export class SubmissionPilotService {
     if (JSON.stringify(manifest.transaction_authorization ?? null) !== JSON.stringify(item.transaction_authorization ?? null))
       throw bad("Manifest authorization does not match the Case.");
     if(JSON.stringify(manifest.named_insured_comparison??null)!==JSON.stringify(item.named_insured_comparison??null))throw bad("Manifest insured names do not match the Case.");
+    for (const field of ["intake_support_evidence","intake_discount_review","intake_warning_facts"]) {
+      const fallback = field==="intake_support_evidence" ? [] : null;
+      if (JSON.stringify(manifest[field]??fallback)!==JSON.stringify(item[field]??fallback))
+        throw bad("Manifest supporting evidence / discount / warning facts do not match the Case.");
+    }
     const listed = new Set(); const byDoc = new Map();
     for (const file of manifest.files) {
       const path = String(file?.path ?? "");
@@ -228,6 +236,8 @@ export class SubmissionPilotService {
       if (loaded.transaction_authorization && !this.repo.transactionAuthorizationStillValid(loaded))
         throw bad("Imported transaction authorization evidence could not be verified.");
       if(loaded.named_insured_comparison&&!this.repo.namedInsuredComparisonStillValid(loaded))throw bad("Imported insured-name comparison evidence could not be verified.");
+      if ((loaded.intake_support_evidence??[]).some(proof=>!this.repo.intakeProofStillValid(loaded,proof)))
+        throw bad("Imported supporting evidence reference failed SHA-256 / page validation.");
       renameSync(staging, target);
       archiveStored = true;
       this.db.exec("BEGIN IMMEDIATE");
@@ -236,12 +246,13 @@ export class SubmissionPilotService {
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(manifest.package_id,manifestHash,item.case_id,caseId,manifest.revision,
           manifest.system,manifest.broker.id,manifest.broker.name,manifest.submitted_at,now(),
           JSON.stringify(manifest),basename(originalFilename).slice(0,180));
-        this.db.prepare("INSERT INTO inbox_tasks(package_id,status,effective_date,updated_at) VALUES(?,?,?,?)")
+        this.db.prepare("INSERT INTO inbox_tasks(package_id,status,effective_date,warnings_json,updated_at) VALUES(?,?,?,?,?)")
           .run(manifest.package_id,"pending",String(item.policy_change?.change_effective_date ||
-            item.policy_change?.requested_effective_date || item.policy?.effective_date || ""),now());
+            item.policy_change?.requested_effective_date || item.policy?.effective_date || ""),
+            JSON.stringify(profile.warnings),now());
         this.auditAs("PACKAGE_IMPORTED",caseId,`AUDITOR:${this.pilotAuditor}`,
           { package_id: manifest.package_id, broker_id: manifest.broker.id,
-            submitted_at: manifest.submitted_at, profile: profile.profile_version, blockers: 0, warnings: [] });
+            submitted_at: manifest.submitted_at, profile: profile.profile_version, blockers: 0, warnings: profile.warnings });
         this.db.exec("COMMIT");
       } catch(e) {this.db.exec("ROLLBACK");throw e;}
       return { imported:true, duplicate:false, package_id:manifest.package_id,
@@ -257,13 +268,14 @@ export class SubmissionPilotService {
     if (system && !["new-business","policy-change"].includes(system)) throw bad("Unknown inbox channel.");
     return this.db.prepare(`SELECT p.package_id AS package_id,p.source_case_id,p.imported_case_id AS case_id,p.revision,
       p.system,p.broker_id,p.broker_name,p.submitted_at,p.imported_at,c.label,c.insured_name,c.carrier,
-      t.status,t.assignee,t.lease_until,t.effective_date,t.updated_at
+      t.status,t.assignee,t.lease_until,t.effective_date,t.warnings_json,t.updated_at
       FROM imported_packages p JOIN inbox_tasks t ON t.package_id=p.package_id
       JOIN cases c ON c.id=p.imported_case_id
       WHERE (? IS NULL OR p.system=?)
       ORDER BY CASE t.status WHEN 'pending' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END,
         CASE WHEN t.effective_date<>'' AND date(t.effective_date)<=date('now','+3 days') THEN 0 ELSE 1 END,
-        p.submitted_at ASC,p.package_id ASC`).all(system ?? null,system ?? null);
+        p.submitted_at ASC,p.package_id ASC`).all(system ?? null,system ?? null)
+      .map(row=>({...row,warnings:JSON.parse(row.warnings_json||"[]"),warnings_json:undefined}));
   }
   assertAuditor(actor) {
     if (actor !== this.pilotAuditor) throw bad("Only the first local pilot Auditor is enabled.", 403);
