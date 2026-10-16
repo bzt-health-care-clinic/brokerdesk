@@ -7,7 +7,7 @@ import { applyDocumentPresence } from "./document-package.ts";
 import { isSignedEvidenceStillValid } from "./signed-verification.ts";
 import { isPolicyChange, normalizePolicyChangeTransactions } from "./policy-change.ts";
 
-export const INTAKE_PROFILE_VERSION = "intake-v1.0.0";
+export const INTAKE_PROFILE_VERSION = { "new-business": "new-business-v1", "policy-change": "policy-change-v1" } as const;
 export const INTAKE_RULE_ENGINE_VERSION = "brokerdesk-rules-20261016";
 export type IntakeSystem = "new-business" | "policy-change";
 export interface IntakeFinding { code: string; message: string; field?: string; document_id?: string; vehicle_id?: string }
@@ -148,6 +148,6 @@ export function evaluateIntakeProfile(
   // De-duplicate overlapping High findings emitted by reused rules and the
   // submission-specific layer, while keeping per-vehicle references distinct.
   const unique = new Map(findings.map(f => [`${f.code}|${f.field ?? ""}|${f.vehicle_id ?? ""}`, f]));
-  return { passed: unique.size === 0, system, profile_version: INTAKE_PROFILE_VERSION,
+  return { passed: unique.size === 0, system, profile_version: INTAKE_PROFILE_VERSION[system],
     rule_engine_version: INTAKE_RULE_ENGINE_VERSION, blockers: [...unique.values()], warnings: [] };
 }
