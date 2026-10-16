@@ -139,6 +139,15 @@ try{
     [],"2026-10-16").length);
   assert(!evaluateIntakeWarnings({...warn,intake_warning_facts:{
     quote_bound:false,vehicle_physical_damage:[]}},[],"2026-10-16").length);
+
+  repo.upsertCase({case:warn},"CREATE_CASE");
+  repo.saveIntakeWarningFacts(warn.case_id,warn.intake_warning_facts);
+  addDoc(warn,"VEHICLE_PHOTO","PHOTO_FOR_OLD");
+  assert.throws(()=>repo.saveIntakeProof(warn.case_id,
+    proof("OLD_VEHICLE","PHYSICAL_DAMAGE","V-1","MISSING_PHOTO")),/hashed and classified/);
+  repo.saveIntakeProof(warn.case_id,proof("OLD_VEHICLE","PHYSICAL_DAMAGE","V-1","PHOTO_FOR_OLD"));
+  assert(!evaluateIntakeWarnings(repo.getCase(warn.case_id),repo.listDocuments(warn.case_id),"2026-10-16")
+    .some(x=>x.code==="INTAKE_OLD_VEHICLE_PHYSICAL_DAMAGE"));
   const max={...warn,policy:{...warn.policy,company:"Max"},
     intake_warning_facts:{quote_issued_date:"2026-08-18",quote_bound:false}};
   assert(!evaluateIntakeWarnings(max,[],"2026-10-16").some(x=>x.code==="INTAKE_QUOTE_AGE"));
