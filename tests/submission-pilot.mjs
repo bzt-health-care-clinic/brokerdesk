@@ -122,15 +122,18 @@ try {
   // Tampered payload with unchanged manifest hash gets rejected before writing a Case.
   const altered=readBdzip(original.archive);
   const source=[...altered.keys()].find(p=>p.startsWith("documents/"));
-  altered.set(source,Buffer.from("Intentional synthetic tamper"));
+  const tamperedBytes=Buffer.from(altered.get(source));
+  tamperedBytes[0]^=1; // identical size; ZIP CRC recomputed, manifest SHA remains stale
+  altered.set(source,tamperedBytes);
   const rebuilt=createBdzip([...altered].map(([path,bytes])=>({path,bytes})));
   const casesBefore=repo.listCases().length;
   assert.throws(()=>pilot.importArchive(rebuilt,original.filename),/SHA-256 mismatch/);
   assert.equal(repo.listCases().length,casesBefore);
+  altered.set(source,unpacked.get(source)); // restore source for isolated allowlist test
   const badId=JSON.parse(altered.get("manifest.json").toString("utf8"));
   badId.package_id="another-unique-package-id";badId.broker.id="STRANGER";
   altered.set("manifest.json",Buffer.from(JSON.stringify(badId)));
-  assert.throws(()=>pilot.importArchive(createBdzip([...altered].map(([path,bytes])=>({path,bytes})))),/Broker ID|SHA-256 mismatch/);
+  assert.throws(()=>pilot.importArchive(createBdzip([...altered].map(([path,bytes])=>({path,bytes})))),/Broker ID/);
 
   const policyChange=baseChange();
   repo.upsertCase({case:policyChange},"CREATE_CASE");
