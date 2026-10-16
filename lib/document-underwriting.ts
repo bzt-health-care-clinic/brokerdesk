@@ -6,7 +6,7 @@ export interface UnderwritingReviewResult { alerts: Alert[]; fingerprints: Recor
 const nonPaymentCancellation = /\bcancell?ed\s*(?:[-—–:]\s*)?(?:due\s+to\s+)?(?:default(?:ing)?\s+(?:policy\s+)?payment|non[-\s]?payment|failure\s+to\s+pay|for\s+non[-\s]?payment)\b/i;
 const uwLicenceMessage = /prior\s+insurance\s+history\s+does\s+not\s+support\s+licensed?\s+date/i;
 const multilineMessage = /multi[-\s]?line\s+discount\s+is\s+provided/i;
-const signatureDate = /APPLICANT['’]?S\s+SIGNATURE[\s\S]{0,300}?(20\d{2}[\/-]\d{2}[\/-]\d{2})/i;
+const signatureDate = /APPLICANT['’]?S[\s\S]{0,120}?SIGNATURE[\s\S]{0,420}?(20\d{2}[\/-]\d{2}[\/-]\d{2})/i;
 const auditSignDate = /Signed\s+At\s*:\s*(\d{2}-\d{2}-20\d{2})/i;
 const documentTypeForPage = (record: UploadedDocumentRecord, page: number): DocumentType => {
   const section = (record.logicalDocuments ?? []).find(section =>
