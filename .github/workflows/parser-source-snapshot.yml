@@ -18,9 +18,20 @@ jobs:
         run: |
           set -eu
           git archive --format=zip --output=parser-source.zip HEAD lib local-server app components scripts tests package.json package-lock.json tsconfig.json vite.config.ts .github/workflows
+      - name: Fetch locked PDF.js text dependencies, no customer input
+        shell: bash
+        run: |
+          set -eu
+          mkdir vendor
+          for package in pdfjs-dist @napi-rs/canvas @napi-rs/canvas-linux-x64-gnu; do
+            version=$(node -e 'const l=require("./package-lock.json");console.log(l.packages["node_modules/"+process.argv[1]].version)' "$package")
+            npm pack --ignore-scripts --pack-destination vendor "$package@$version"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: parser-source
-          path: parser-source.zip
+          path: |
+            parser-source.zip
+            vendor/*.tgz
           retention-days: 1
           if-no-files-found: error
