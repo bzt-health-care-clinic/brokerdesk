@@ -125,7 +125,8 @@ export class LocalTextProvider implements ExtractionProvider {
 }
 
 const valueFrom = (text: string, labels: string[]) => {
-  for (const label of labels) {
+  // Longest label first: 'Structure Type' must not be parsed as 'Structure' with value 'Type: ...'.
+  for (const label of [...labels].sort((left,right)=>right.length-left.length)) {
     const match = text.match(new RegExp(`(?:^|\\n)[ \\t]*${label}(?:[ \\t]*[:#-][ \\t]*|[ \\t]+|[ \\t]*\\n[ \\t]*)([^\\n\\r]+)`, "im"));
     if (match) return match[1].trim();
   }
