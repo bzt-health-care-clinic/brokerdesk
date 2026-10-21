@@ -53,6 +53,12 @@ function cleanDate(s:string,order:'DMY'|'YMD'){return templateDate(s,order);}
 export function parseMvrLayout(raw:RawExtractedDocument):ParsedSource|undefined{
   const pages=(raw.pages??[]).filter(p=>/ONTARIO\s+Driving\s+Record/i.test(p.text??'') && p.blocks?.length);
   if(!pages.length)return;
+  // The document title alone is not a template fingerprint. Other MVR layouts
+  // use labelled ISO-date rows; routing those into CGI's DMY parallel-column
+  // grammar would discard identity and hide the driver's association controls.
+  const cgiTemplate=pages.some(p=>/\bLicence Number\s*:/i.test(p.text??'') &&
+    /\bExpiry Date\s*:/i.test(p.text??'') && /\bClass\s*:/i.test(p.text??''));
+  if(!cgiTemplate)return;
   const result=source(raw,'MVR');
   for(const page of pages){
     const cells=layoutCells(page,.8),heading=cells.find(c=>/ONTARIO\s+Driving\s+Record/i.test(c.text));

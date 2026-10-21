@@ -4,6 +4,7 @@ import { parserFor, classifyDocument } from '../lib/document-ingestion.ts';
 import { parseAppliedRating } from '../lib/applied-rating-parser.ts';
 import { parseMvrLayout, parseDashLayout } from '../lib/driver-report-layout.ts';
 import { pdfLayoutPage } from '../lib/pdf-layout.ts';
+import { proposedDrivers } from '../lib/proposed-drivers.ts';
 import { activeParsedSources, sectionRevision } from '../lib/active-evidence.ts';
 import { reconcileDocumentsIntoCase } from '../lib/reconciliation.ts';
 import { buildAuditorWorksheet } from '../lib/auditor-worksheet.ts';
@@ -83,6 +84,19 @@ function mvr(number,licence,name,count){return page(number,[block('MVR Abstracts
  block('Demerit Points: 00',30,150),block('Class: G***',220,150),block('Conditions: */N',420,150),
  block('Status: LICENCED',30,175),block('Issue Date: 21/03/2000',345,175),
  block('Requested On: 07/10/2026',30,190),block('Reply Date: 07/10/2026',345,190)]);}
+// A title match cannot force a different MVR table grammar. The existing
+// labelled ISO-date variant must still expose a manually confirmable driver.
+const alternateMvr=page(1,[block('MVR - Ontario Driving Record',20,20),
+  block('Report ID SYN-ALT',20,45),block('Name ALPHA,MIRA',20,65),
+  block('Licence Number '+LICENCE,20,85),block('Reply Date 2026-10-07',20,105),
+  block('Licence Class G',20,125),block('Number of Convictions 0',20,145)]);
+assert.equal(parseMvrLayout(raw([alternateMvr])),undefined);
+const alternateParsed=await parserFor('MVR').parse(raw([alternateMvr]));
+assert.equal(alternateParsed.data.driverName,'ALPHA,MIRA');
+assert.equal(alternateParsed.data.licenceNumber,LICENCE);
+assert.equal(alternateParsed.data.replyDate,'2026-10-07');
+assert.equal(proposedDrivers([{id:'SYNTHETIC_LAYOUT',documentType:'MVR',parsed:alternateParsed}],[]).length,1,
+  'Non-CGI MVR identity must keep the Driver review and confirmation UI available.');
 const clean=mvr(9,LICENCE,'ALPHA,MIRA',0),positive=mvr(10,OTHER_LICENCE,'BETA,NOEL',1);
 positive.blocks.push(block('DATE CONVICTIONS, DISCHARGES AND OTHER ACTIONS',30,220),block('07/08/2024',30,245),
  block('SYNTHETIC SPEEDING RECORD',160,245),block('OFFENCE DATE 2024/08/01',160,262));
