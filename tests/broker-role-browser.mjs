@@ -74,9 +74,18 @@ try{
   throw e;
 }finally{
   await browser?.close().catch(()=>{});
-  for(const entry of children.reverse()){
-    if(!entry.child.killed)entry.child.kill();
-    try{await Promise.race([new Promise(resolve=>entry.child.once("exit",resolve)),delay(2500)]);}catch{}
+  for(const child of children.reverse()){
+    if(child.exitCode!==null || child.signalCode!==null)continue;
+    if(!child.killed)child.kill();
+    try{
+      await Promise.race([
+        new Promise(resolve=>{
+          if(child.exitCode!==null || child.signalCode!==null)return resolve();
+          child.once("exit",resolve);
+        }),
+        delay(2500)
+      ]);
+    }catch{}
   }
   rmSync(temp,{recursive:true,force:true,maxRetries:5,retryDelay:250});
 }
