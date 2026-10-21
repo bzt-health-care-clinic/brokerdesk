@@ -43,6 +43,32 @@ export function buildAuditorWorksheet(item:InsuranceCase,records:UploadedDocumen
   const auto=item.case_type==="new_auto"||item.case_type==="auto_policy_change";
   const sections:WorksheetSection[]=[];
   const seenSources=new Set<string>();
+  function sourceMatchesSubject(source:ParsedSource,subjectType?:string,subjectId?:string):boolean{
+    if(!subjectType||!subjectId)return true;
+    if(source.subjectType && source.subjectType!==subjectType)return false;
+    if(source.subjectId)return source.subjectId===subjectId;
+    // Unassigned multi-vehicle and multi-driver reports must never be repeated
+    // under each person/car. Match unique identifiers or leave unassigned.
+    if(subjectType==="VEHICLE"){
+      const target=item.vehicles.find(v=>v.id===subjectId);
+      if(!target)return false;
+      const vin=String(source.data?.vin??"").toUpperCase().replace(/[\s-]/g,"");
+      const targetVin=String(target.vin??"").toUpperCase().replace(/[\s-]/g,"");
+      if(vin)return Boolean(targetVin&&vin===targetVin);
+      return item.vehicles.length===1;
+    }
+    if(subjectType==="DRIVER"){
+      const target=item.drivers.find(d=>d.id===subjectId);
+      if(!target)return false;
+      const licence=String(source.data?.licenceNumber??"").toUpperCase().replace(/[\s-]/g,"");
+      const targetLicence=String(target.licence_number??"").toUpperCase().replace(/[\s-]/g,"");
+      if(licence)return Boolean(targetLicence&&licence===targetLicence);
+      const named=String(source.data?.driverName??"");
+      if(named)return sameNamedPersons([named],[target.name]);
+      return item.drivers.length===1;
+    }
+    return true;
+  }
   function fieldEvidence(keys:string[],subjectType?:string,subjectId?:string):WorksheetEvidence[]{
     const wanted=new Set(keys);
     const data:WorksheetEvidence[]=[];
@@ -59,7 +85,7 @@ export function buildAuditorWorksheet(item:InsuranceCase,records:UploadedDocumen
         const match=active.find(x=>x.record.id===value.documentId &&
           (!value.logicalDocumentId||x.source.logicalDocumentId===value.logicalDocumentId));
         if(!match)continue;
-        if(subjectId&&match.source.subjectId&&match.source.subjectId!==subjectId)continue;
+        if(!sourceMatchesSubject(match.source,subjectType,subjectId))continue;
         const original=value.correctedValue??value.value;
         if(!available(original))continue;
         emit({documentId:match.record.id,logicalDocumentId:match.source.logicalDocumentId,
@@ -69,15 +95,7 @@ export function buildAuditorWorksheet(item:InsuranceCase,records:UploadedDocumen
       }
     }
     for(const {record,source} of active){
-      if(subjectType&&source.subjectType&&source.subjectType!==subjectType)continue;
-      if(subjectId&&source.subjectId&&source.subjectId!==subjectId)continue;
-      // Unscoped MVR/Ownership must not be assumed to belong to the first driver/vehicle.
-      if(subjectId&&!source.subjectId&&
-        (subjectType==="DRIVER" && /MVR|DASH/.test(source.documentType) ||
-        subjectType==="VEHICLE" && /OWNERSHIP|BILL_OF_SALE/.test(source.documentType))){
-        const candidates=subjectType==="DRIVER"?item.drivers:item.vehicles;
-        if(candidates.length!==1)continue;
-      }
+      if(!sourceMatchesSubject(source,subjectType,subjectId))continue;
       for(const key of keys){
         const corrected=source.corrections?.[key]?.correctedValue;
         const raw=corrected??source.data?.[key];
@@ -96,7 +114,14 @@ export function buildAuditorWorksheet(item:InsuranceCase,records:UploadedDocumen
     const add:FieldBuilder=(rowId,label,value,keys=[],opts={})=>{
       seenSources.clear();
       const evidence=fieldEvidence(keys,opts.subjectType,opts.subjectId);
-      const declared=available(value)?stringify(value):"";
+      // Default 0/false values in untouched Case factories are NOT answers.
+      // Keep an explicitly Broker-verified Ownership lease status as a Case
+      // entry, but flag all other unsourced numeric/boolean defaults as missing.
+      const verifiedLease=rowId.endsWith("-tenure")&&
+        item.vehicles.some(vehicle=>vehicle.id===opts.subjectId&&vehicle.ownership?.received);
+      const unresolvedDefault=(value===false||value===0)&&!evidence.length&&
+        !verifiedLease&&!item.factConfirmations?.[rowId]?.confirmed;
+      const declared=!unresolvedDefault&&available(value)?stringify(value):"";
       const extractedValues=[...new Set(evidence.map(x=>compare(x.sourceValue)))];
       const sourceFields=(item.field_sources??[]).filter(x=>
         keys.includes(x.canonicalField??x.field) &&

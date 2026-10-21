@@ -556,6 +556,7 @@ export default function Home() {
         <aside className="review-panel panel">
           {brokerMode && <SubmissionPanel data={caseData} records={ingestedDocuments} saveState={saveState}
             onCaseSaved={setCaseData} onNavigate={field => {
+              if(brokerMode){centerPanelRef.current?.scrollTo({top:0,behavior:"smooth"});return;}
               if (field.startsWith("policy_change") || field.includes("authorization")) setActiveTab("change");
               else if (field.startsWith("vehicles") || field.includes("ownership")) setActiveTab("vehicle");
               else if (field.includes("driver") || field.includes("mvr")) setActiveTab("driver");

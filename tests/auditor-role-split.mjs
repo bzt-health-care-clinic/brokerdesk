@@ -45,6 +45,37 @@ assert(runPhase3Rules(auto).some(x=>x.code==="REQUIRED_DRIVER_MISSING")); // Aud
 const mismatch=buildAuditorWorksheet({...auto,insured:{name:"JANE DOE",co_insured:[]}},[quote]);
 assert.equal(row(mismatch,"insured").status,"conflict");
 
+// Multi-vehicle / multi-driver associations must not copy one report to every subject.
+const splitAuto={...auto,
+  vehicles:[
+    {id:"CAR-A",vin:"1HGCM82633A004352",year:2026,make:"Honda",model:"Civic",
+      primary_use:"",annual_km:0,commute_km:0,leased:false,owned:true,
+      business_use_percent:0,winter_tires:false,parking:"",garaging_address:""},
+    {id:"CAR-B",vin:"2T3B1RFV7RC472381",year:2026,make:"Toyota",model:"RAV4",
+      primary_use:"",annual_km:0,commute_km:0,leased:false,owned:true,
+      business_use_percent:0,winter_tires:false,parking:"",garaging_address:""}],
+  drivers:[
+    {id:"DRV-A",name:"JOHN DOE",licence_number:"X111",licence_class:"",
+      mvr_received:"",principal:false},
+    {id:"DRV-B",name:"ANN LEE",licence_number:"Y222",licence_class:"",
+      mvr_received:"",principal:false}]
+};
+const syntheticMvr=sourceRecord("MVR-ONLY-A","MVR",{
+  documentType:"MVR",confidence:1,parsedAt:new Date().toISOString(),
+  data:{licenceNumber:"X111",driverName:"JOHN DOE",licenceClass:"G"},
+  fieldEvidence:{licenceClass:[{page:1,text:"G"}]},warnings:[]});
+const splitSheet=buildAuditorWorksheet(splitAuto,[quote,syntheticMvr]);
+assert(row(splitSheet,"vehicle-0-vin").evidence.some(source=>source.documentId==="QUOTE"));
+assert.equal(row(splitSheet,"vehicle-1-vin").evidence.length,0,
+  "First car Quote must not source second car VIN.");
+assert.equal(row(splitSheet,"vehicle-1-annual").status,"missing",
+  "Default 0 km must not be presented as a confirmed value.");
+assert(row(splitSheet,"driver-0-class").evidence.some(source=>source.documentId==="MVR-ONLY-A"));
+assert.equal(row(splitSheet,"driver-1-class").evidence.length,0,
+  "First driver's MVR cannot certify the second driver's licence.");
+assert.equal(row(splitSheet,"driver-1-principal").status,"missing",
+  "Default false must not be presented as a verified No.");
+
 // Home document extraction becomes an Auditor worksheet, not another Broker questionnaire.
 const home=createBlankHabCase();
 home.policy.company="Intact";home.insured.name="LEE, ANN";

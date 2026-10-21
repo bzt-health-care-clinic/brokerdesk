@@ -7,6 +7,7 @@ import type { UploadedDocumentRecord } from "@/lib/extraction-types";
 import { activeParsedSources } from "@/lib/active-evidence";
 import { applyDocumentPresence } from "@/lib/document-package";
 import { POLICY_CHANGE_TRANSACTIONS } from "@/lib/policy-change";
+import { hasOwnershipSectionForVehicle, confirmVehicleOwnership } from "@/lib/broker-file-intake";
 
 type Props={data:InsuranceCase;records:UploadedDocumentRecord[];onChange:(next:InsuranceCase)=>void};
 const isAuto=(item:InsuranceCase)=>item.case_type==="new_auto"||item.case_type==="auto_policy_change";
@@ -50,15 +51,22 @@ export function BrokerIntakePanel({data,records,onChange}:Props){
       if(vehicle.id!==id)return vehicle;
       const current=vehicle.ownership??{received:false,registered_owner:"",address:"",
         year:null,make:"",model:"",vin:"",leased:null,lessor:null,lienholder:null};
-      if(field==="owner")return {...vehicle,ownership:{...current,registered_owner:value}};
-      if(field==="ownerAddress")return {...vehicle,ownership:{...current,address:value}};
+      const pending={...current,received:false}; // New identity facts require fresh file verification.
+      if(field==="owner")return {...vehicle,ownership:{...pending,registered_owner:value}};
+      if(field==="ownerAddress")return {...vehicle,ownership:{...pending,address:value}};
       if(field==="leaseStatus")return {...vehicle,leased:value==="yes",
-        ownership:{...current,leased:value==="unknown"?null:value==="yes"}};
+        ownership:{...pending,leased:value==="unknown"?null:value==="yes"}};
       if(field==="lessor")return {...vehicle,ownership:{
-        ...current,lessor:value?{name:value,address:current.lessor?.address??""}:null}};
+        ...pending,lessor:value?{name:value,address:current.lessor?.address??""}:null}};
       if(field==="vin")return {...vehicle,vin:value.toUpperCase(),
-        ownership:{...current,vin:value.toUpperCase()}};
-      return {...vehicle,[field]:field==="year"?(Number(value)||0):value};
+        ownership:{...pending,vin:value.toUpperCase()}};
+      if(field==="year")return {...vehicle,year:Number(value)||0,
+        ownership:{...pending,year:Number(value)||null}};
+      if(field==="make")return {...vehicle,make:value,
+        ownership:{...pending,make:value}};
+      if(field==="model")return {...vehicle,model:value,
+        ownership:{...pending,model:value}};
+      return vehicle;
     })});
   }
   function appendOwnership(candidate:(typeof evidenceVehicles)[number]){
@@ -183,6 +191,21 @@ export function BrokerIntakePanel({data,records,onChange}:Props){
             value={vehicle.ownership?.lessor?.name??""}
             onChange={event=>changeVehicle(vehicle.id!,"lessor",event.target.value)}/></label>}
         </div>
+        <label className="broker-ownership-verification">
+          <input type="checkbox" aria-label={"Broker vehicle "+(index+1)+" ownership verified"}
+            checked={vehicle.ownership?.received===true}
+            disabled={!hasOwnershipSectionForVehicle(vehicle,records)}
+            onChange={event=>{
+              if(event.target.checked && !window.confirm(
+                "I visually checked the actual Ownership, VIN, year/make/model and registered owner for this vehicle."))
+                return;
+              onChange(confirmVehicleOwnership(data,vehicle.id!,event.target.checked,records));
+            }}/>
+          I verified this vehicle against its active original Ownership section.
+        </label>
+        {!hasOwnershipSectionForVehicle(vehicle,records)&&
+          <small>Link an active Ownership section to this vehicle in Documents → Manage sections,
+            or confirm a matching VIN from parsed Ownership, before verifying.</small>}
         <Button size="sm" variant="outline" onClick={()=>{
           if(window.confirm("Remove vehicle from the submission?"))
             onChange({...data,vehicles:data.vehicles.filter(v=>v.id!==vehicle.id)});
