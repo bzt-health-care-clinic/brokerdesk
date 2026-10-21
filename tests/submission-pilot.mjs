@@ -12,6 +12,7 @@ import { evaluateIntakeProfile } from "../lib/intake-profile.ts";
 import { activeParsedSources, sectionRevision } from "../lib/active-evidence.ts";
 import { buildAuditorWorksheet } from "../lib/auditor-worksheet.ts";
 import { createHash } from "node:crypto";
+import { PARSER_VERSION } from "../lib/document-ingestion.ts";
 
 const root=mkdtempSync(join(tmpdir(),"brokerdesk-submission-pilot-"));
 const paths=resolveDataPaths({...process.env,BROKERDESK_DATA_DIR:root});
@@ -97,12 +98,14 @@ try {
     data:{namedInsured:"SYNTHETIC HOME PERSON",riskAddress:"1 Fake Sample Road",
       occupancy:"Owner Occupied",structure:"Detached"},
     warnings:[],fieldEvidence:{riskAddress:[{page:1,text:"1 Fake Sample Road",confidence:1}],
-      occupancy:[{page:1,text:"Owner Occupied",confidence:1}]}
+      occupancy:[{page:1,text:"Owner Occupied",confidence:1}]},
+    entities:[{id:"synthetic-property-1",kind:"PROPERTY",label:"Synthetic Property 1",
+      data:{roof:"Synthetic Roof"},fieldEvidence:{roof:[{page:1,text:"Synthetic Roof",confidence:1}]},warnings:[]}]
   };
-  repo.updateDocument(quoteDoc.id,{...quoteDoc,parserVersion:5,extractionVersion:2,
+  repo.updateDocument(quoteDoc.id,{...quoteDoc,parserVersion:PARSER_VERSION,extractionVersion:2,
     parsedSources:[quoteSource]});
   assert.equal(activeParsedSources(repo.listDocuments(home.case_id)
-    .find(doc=>doc.id==="HABQUOTE")).length,1);
+    .find(doc=>doc.id==="HABQUOTE")).length,2);
   assert.throws(()=>pilot.exportCase(home.case_id,{id:"PILOT-BROKER-1",name:"Synthetic Broker One"}),/hard blockers/);
   const pending=repo.getCase(home.case_id);
   const signed=repo.saveSignedCase(home.case_id,{
@@ -140,10 +143,16 @@ try {
   assert(importedQuote,"Imported Quote file must be retained.");
   assert.notEqual(importedQuote.id,"HABQUOTE","Auditor uses fresh document IDs.");
   const importedActive=activeParsedSources(importedQuote);
-  assert.equal(importedActive.length,1,"Valid Broker parsed sources must remain active after ID remapping.");
+  assert.equal(importedActive.length,2,"Root and grouped Broker parsed sources must remain active after ID remapping.");
+  const importedEntity=importedActive.find(source=>source.entityId==="synthetic-property-1");
+  assert.equal(importedEntity.documentId,importedQuote.id);
+  assert.equal(importedEntity.logicalDocumentId,importedQuote.logicalDocuments[0].id);
+  assert.equal(importedEntity.data.roof,"Synthetic Roof");
   assert.equal(importedActive[0].data.occupancy,"Owner Occupied");
   const importedWorksheet=buildAuditorWorksheet(received,repo.listDocuments(imported.case_id));
   assert.equal(importedWorksheet.kind,"new-home");
+  const groupedRoof=importedWorksheet.sections.flatMap(group=>group.rows).find(row=>row.value==="Synthetic Roof");
+  assert(groupedRoof?.evidence.some(source=>source.entityId==="synthetic-property-1"&&source.documentId===importedQuote.id&&source.page===1));
   const occupancyRow=importedWorksheet.sections.flatMap(group=>group.rows)
     .find(row=>row.id==="property-occupancy");
   assert.equal(occupancyRow.value,"Owner Occupied");

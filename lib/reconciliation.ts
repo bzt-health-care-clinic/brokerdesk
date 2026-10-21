@@ -73,13 +73,13 @@ const numeric = (value: unknown) => {
 
 const driverFields = new Set(["driverName", "dob", "licenceNumber", "licenceClass", "g1Date", "g2Date", "gDate", "expiryDate", "demeritPoints", "requestDate", "releaseDate", "replyDate", "receivedDate", "issueDate", "licenceStatus", "conditions", "convictions", "reportId", "reportDate","licenceProvince"]);
 const vehicleFields = new Set(["registeredOwner", "ownerAddress", "vin", "year", "make", "model", "plate", "lessor", "lienholder", "vehicleUse", "annualKm", "commuteKm"]);
-const supportId = (source: ParsedSource) => JSON.stringify([source.documentId, source.logicalDocumentId, source.sourceRevision]);
+const supportId = (source: ParsedSource) => JSON.stringify([source.documentId, source.logicalDocumentId, source.sourceRevision, source.entityId]);
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 const nonempty = (v: unknown) => v !== undefined && v !== null && v !== "";
 
 function association(data: InsuranceCase, source: ParsedSource, field: string) {
   if (source.claimRecordId && field.startsWith("claim.")) return { type: "CLAIM", lob: "AUTO", id: source.claimRecordId, primary: !data.case_type.includes("home") };
-  const type = driverFields.has(field) ? "DRIVER" : vehicleFields.has(field) ? "VEHICLE" : ["propertyInsuredSince", "continuouslyInsuredSince", "occupiedSince", "riskAddress", "numberOfMortgages", "mortgagee", "mortgageeAddress", "natureOfInterest", "lossPayee", "policyType","occupancy","structure","construction","exteriorFinish","yearBuilt","families","units","livingArea","bedrooms","bathrooms","garage","roof","plumbing","electrical","heating","smokeFree","swimmingPool","dogExposure","rental","airbnb","vacant","businessUse"].includes(field) ? "PROPERTY" : "POLICY";
+  const type = source.entityId && ["DRIVER","VEHICLE","PROPERTY"].includes(source.subjectType ?? "") ? source.subjectType! : driverFields.has(field) ? "DRIVER" : vehicleFields.has(field) ? "VEHICLE" : ["propertyInsuredSince", "continuouslyInsuredSince", "occupiedSince", "riskAddress", "numberOfMortgages", "mortgagee", "mortgageeAddress", "natureOfInterest", "lossPayee", "policyType","occupancy","structure","construction","exteriorFinish","yearBuilt","families","units","livingArea","bedrooms","bathrooms","garage","roof","plumbing","electrical","heating","smokeFree","swimmingPool","dogExposure","rental","airbnb","vacant","businessUse"].includes(field) ? "PROPERTY" : "POLICY";
   const lob = source.lineOfBusiness ?? (/HAB|PROPERTY|MORTGAGE/.test(source.documentType) ? "HAB" : /AUTO|OWNERSHIP|MVR|DASH|VEHICLE|LEASE|FINANCE/.test(source.documentType) ? "AUTO" : data.case_type.includes("home") ? "HAB" : "AUTO");
   const primaryLob = data.case_type.includes("home") ? "HAB" : "AUTO";
   if (type === "POLICY" || type === "PROPERTY") return { type, lob, id: type === "POLICY" ? data.policy.id! : data.habitational_risk?.id, primary: lob === primaryLob };
@@ -139,7 +139,7 @@ export function reconcileDocumentsIntoCase(current: InsuranceCase, records: Uplo
     const vehicleScope = association(next, { ...source, subjectType: "VEHICLE", subjectId: claim.vehicle_id, data: { vin: claim.vehicle_vin } }, "vin");
     claim.driver_id = driverScope.primary ? driverScope.id : undefined;
     claim.vehicle_id = vehicleScope.primary ? vehicleScope.id : undefined;
-    claim.report_subject_id = association(next, source, "licenceNumber").id;
+    claim.report_subject_id = association(next, { ...source, data: { ...source.data, licenceNumber: source.data.reportSubjectLicence ?? source.data.licenceNumber } }, "licenceNumber").id;
     claim.association_status = claim.driver_id ? "ASSIGNED" : "UNASSIGNED";
     activeClaimIds.add(claim.id);
     if (!next.claims.some(c => c.id === claim.id)) next.claims.push({ id: claim.id, loss_date: "", insurer: "", policy_number: "", claim_number: "", coverage: "", loss_amount: null, at_fault_percent: null, status: "", source: claim.source });
@@ -153,7 +153,7 @@ export function reconcileDocumentsIntoCase(current: InsuranceCase, records: Uplo
     const field = canonicalFieldKey(key);
     if (!nonempty(source.data[key])) continue;
     const scope = association(next, source, field);
-    const identity = !scope.id ? `UNASSIGNED:${source.documentId}:${source.logicalDocumentId ?? "file"}:${field}` : scope.type === "POLICY" && scope.primary ? field : `${scope.lob}:${scope.type}:${scope.id}:${field}`;
+    const identity = !scope.id ? `UNASSIGNED:${source.documentId}:${source.logicalDocumentId ?? "file"}:${source.entityId ?? "scalar"}:${field}` : scope.type === "POLICY" && scope.primary ? field : `${scope.lob}:${scope.type}:${scope.id}:${field}`;
     const bucket = buckets.get(identity) ?? { field, scope, entries: [] };
     bucket.entries.push({ source, key }); buckets.set(identity, bucket);
   }
@@ -165,7 +165,7 @@ export function reconcileDocumentsIntoCase(current: InsuranceCase, records: Uplo
     const bucket = buckets.get(identity);
     const field = bucket?.field ?? old?.canonicalField ?? canonicalFieldKey(identity);
     const entries = bucket?.entries ?? [];
-    const values = entries.map(({ source, key }) => ({ source: sourceName(source.documentType), value: source.corrections?.[key]?.originalExtractedValue ?? source.data[key], correctedValue: source.corrections?.[key]?.correctedValue, documentId: source.documentId, logicalDocumentId: source.logicalDocumentId, sourceRevision: source.sourceRevision, originalKey: key, confidence: source.confidence, evidence: source.fieldEvidence[key] }));
+    const values = entries.map(({ source, key }) => ({ source: sourceName(source.documentType), value: source.corrections?.[key]?.originalExtractedValue ?? source.data[key], correctedValue: source.corrections?.[key]?.correctedValue, documentId: source.documentId, logicalDocumentId: source.logicalDocumentId, sourceRevision: source.sourceRevision, entityId: source.entityId, originalKey: key, confidence: source.confidence, evidence: source.fieldEvidence[key] }));
     const effective = entries.map(({ source, key }) => source.corrections?.[key]?.correctedValue ?? source.data[key]);
     const unique = new Set(effective.map(comparison));
     const hasCorrection = entries.some(({ source, key }) => source.corrections?.[key]);

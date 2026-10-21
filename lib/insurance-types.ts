@@ -77,6 +77,7 @@ export type FieldSourceName =
   | "manual";
 
 export interface FieldSourceValue {
+  entityId?: string;
   logicalDocumentId?: string;
   sourceRevision?: string;
   originalKey?: string;

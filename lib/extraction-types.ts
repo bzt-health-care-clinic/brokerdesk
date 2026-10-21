@@ -32,3 +32,21 @@ export interface ManualCorrection<T = unknown> { originalExtractedValue: T; corr
 // Physical-file identity is distinct from each rendered page's sourceHash.
 export interface UploadedDocumentRecord { sectionAnalysisVersion?: number; sourceHash?: string; currentSourceHash?: string; withdrawnParsedSources?: ParsedSource[]; withdrawnSectionRanges?: { startPage: number; endPage: number }[]; }
 export interface ParsedSource<T = Record<string, unknown>> { claimRecordId?: string; logicalDocumentId?: string; sourceRevision?: string; subjectType?: string; subjectId?: string; lineOfBusiness?: "AUTO" | "HAB"; }
+
+/** Extracted groups are source observations, not confirmed rated vehicles or policy drivers. */
+export interface ParsedEntity {
+  id: string;
+  kind: 'VEHICLE' | 'DRIVER' | 'PROPERTY' | 'POLICY_HISTORY';
+  label: string;
+  excluded?: boolean;
+  data: Record<string, unknown>;
+  fieldEvidence: Record<string, FieldEvidence[]>;
+  warnings: ExtractionWarning[];
+}
+export interface ParsedSource<T = Record<string, unknown>> {
+  entities?: ParsedEntity[];
+  entityId?: string;
+  entityLabel?: string;
+  excluded?: boolean;
+  layoutVersion?: number;
+}

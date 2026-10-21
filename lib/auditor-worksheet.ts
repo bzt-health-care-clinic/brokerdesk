@@ -6,7 +6,7 @@ import { normalizePolicyChangeTransactions } from "./policy-change.ts";
 
 export type WorksheetStatus="extracted"|"case-only"|"missing"|"conflict"|"confirmed";
 export interface WorksheetEvidence {
-  documentId:string;logicalDocumentId?:string;fileName:string;documentType:string;
+  documentId:string;logicalDocumentId?:string;entityId?:string;fileName:string;documentType:string;
   page?:number;confidence?:number;sourceValue:string;field:string;
 }
 export interface WorksheetRow {
@@ -44,7 +44,9 @@ export function buildAuditorWorksheet(item:InsuranceCase,records:UploadedDocumen
   const sections:WorksheetSection[]=[];
   const seenSources=new Set<string>();
   function sourceMatchesSubject(source:ParsedSource,subjectType?:string,subjectId?:string):boolean{
-    if(!subjectType||!subjectId)return true;
+    if(source.excluded)return false;
+    if(!subjectType||!subjectId)return !source.entityId;
+    if(source.entityId && source.subjectType!==subjectType)return false;
     if(source.subjectType && source.subjectType!==subjectType)return false;
     if(source.subjectId)return source.subjectId===subjectId;
     // Unassigned multi-vehicle and multi-driver reports must never be repeated
@@ -73,7 +75,7 @@ export function buildAuditorWorksheet(item:InsuranceCase,records:UploadedDocumen
     const wanted=new Set(keys);
     const data:WorksheetEvidence[]=[];
     const emit=(entry:WorksheetEvidence)=>{
-      const key=[entry.documentId,entry.logicalDocumentId,entry.field,entry.sourceValue].join("|");
+      const key=[entry.documentId,entry.logicalDocumentId,entry.entityId,entry.field,entry.sourceValue].join("|");
       if(!seenSources.has(key)){seenSources.add(key);data.push(entry);}
     };
     // Reuse broker or auditor source resolutions when the original source section remains active.
@@ -83,12 +85,12 @@ export function buildAuditorWorksheet(item:InsuranceCase,records:UploadedDocumen
       if(subjectId&&candidate.subjectId&&candidate.subjectId!==subjectId)continue;
       for(const value of candidate.values??[]){
         const match=active.find(x=>x.record.id===value.documentId &&
-          (!value.logicalDocumentId||x.source.logicalDocumentId===value.logicalDocumentId));
+          (!value.logicalDocumentId||x.source.logicalDocumentId===value.logicalDocumentId) && x.source.entityId===value.entityId);
         if(!match)continue;
         if(!sourceMatchesSubject(match.source,subjectType,subjectId))continue;
         const original=value.correctedValue??value.value;
         if(!available(original))continue;
-        emit({documentId:match.record.id,logicalDocumentId:match.source.logicalDocumentId,
+        emit({documentId:match.record.id,logicalDocumentId:match.source.logicalDocumentId,entityId:match.source.entityId,
           fileName:match.record.fileName,documentType:match.source.documentType,
           page:value.evidence?.[0]?.page,confidence:value.confidence,
           sourceValue:stringify(original),field:candidate.canonicalField??candidate.field});
@@ -100,7 +102,7 @@ export function buildAuditorWorksheet(item:InsuranceCase,records:UploadedDocumen
         const corrected=source.corrections?.[key]?.correctedValue;
         const raw=corrected??source.data?.[key];
         if(!available(raw))continue;
-        emit({documentId:record.id,logicalDocumentId:source.logicalDocumentId,
+        emit({documentId:record.id,logicalDocumentId:source.logicalDocumentId,entityId:source.entityId,
           fileName:record.fileName,documentType:source.documentType,
           page:source.fieldEvidence?.[key]?.[0]?.page,
           confidence:source.fieldEvidence?.[key]?.[0]?.confidence??source.confidence,
@@ -119,7 +121,9 @@ export function buildAuditorWorksheet(item:InsuranceCase,records:UploadedDocumen
       // entry, but flag all other unsourced numeric/boolean defaults as missing.
       const verifiedLease=rowId.endsWith("-tenure")&&
         item.vehicles.some(vehicle=>vehicle.id===opts.subjectId&&vehicle.ownership?.received);
-      const unresolvedDefault=(value===false||value===0)&&!evidence.length&&
+      const manualDefault=(item.field_sources??[]).some(field=>keys.includes(field.canonicalField??field.field)&&
+        Boolean(field.resolved_by_user)&&(!opts.subjectId||field.subjectId===opts.subjectId));
+      const unresolvedDefault=(value===false||value===0)&&!manualDefault&&
         !verifiedLease&&!item.factConfirmations?.[rowId]?.confirmed;
       const declared=!unresolvedDefault&&available(value)?stringify(value):"";
       const extractedValues=[...new Set(evidence.map(x=>compare(x.sourceValue)))];
@@ -304,7 +308,7 @@ export function buildAuditorWorksheet(item:InsuranceCase,records:UploadedDocumen
         note:!claims.length?"No recorded claims is not a verified clean history. Check DASH/AutoPlus.":undefined});
       for(const [i,c] of claims.entries()){
         add("claim-"+i,"Claim "+(i+1)+" · date / driver / fault / status",
-          [c.loss_date,c.driver,c.at_fault_percent===null?"Fault unknown":c.at_fault_percent+"% AF",c.status].filter(Boolean).join(" · "),
+          [c.loss_date,c.driver,c.at_fault_percent==null?"Fault unknown":c.at_fault_percent+"% AF",c.status].filter(Boolean).join(" · "),
           ["claims"],{required:false});
       }
     });
@@ -373,20 +377,61 @@ export function buildAuditorWorksheet(item:InsuranceCase,records:UploadedDocumen
     add("down","Down payment",item.payment?.down_payment,["downPayment"],{required:false});
     add("total","Total estimated",item.payment?.total_cost,["totalCost"],{required:false});
   });
+  // Grouped source observations do not create rated vehicles or principal-driver assignments.
+  for(const {record,source} of active.filter(pair=>!pair.source.entityId)){
+    for(const group of source.entities??[]){
+      const rows:WorksheetRow[]=[];
+      for(const [field,value] of Object.entries(group.data)){
+        if(value===undefined||value===null)continue;
+        const proofs=group.fieldEvidence[field]??[];
+        rows.push({id:group.id+"-"+field,label:field,value:Array.isArray(value)&&value.length===0?"Explicitly reported: none":stringify(value),
+          status:proofs.length?"extracted":"case-only",required:false,
+          note:group.excluded?"EXCLUDED source vehicle; not a rated vehicle or eligible proof target.":
+            group.kind==="POLICY_HISTORY"?"Historical policy observation; not the current policy.":
+            "Source group only. Confirm identity/assignment before applying to the Case.",
+          evidence:proofs.map(proof=>({documentId:record.id,logicalDocumentId:source.logicalDocumentId,
+            entityId:group.id,fileName:record.fileName,documentType:source.documentType,field,
+            sourceValue:proof.text??stringify(value),page:proof.page,confidence:proof.confidence}))});
+      }
+      for(const [i,warning] of group.warnings.entries())rows.push({id:group.id+"-warning-"+i,
+        label:warning.field??"Source review",value:"NOT CONFIRMED",status:"missing",required:true,note:warning.message,
+        evidence:(group.fieldEvidence[warning.field??""]??[]).map(proof=>({documentId:record.id,
+          logicalDocumentId:source.logicalDocumentId,entityId:group.id,fileName:record.fileName,
+          documentType:source.documentType,field:warning.field??"",sourceValue:proof.text??"",
+          page:proof.page,confidence:proof.confidence}))});
+      if(rows.length)sections.push({id:"group-"+record.id+"-"+(source.logicalDocumentId??"file")+"-"+group.id,
+        title:(group.excluded?"EXCLUDED - ":"")+group.label+" - "+record.fileName,rows});
+    }
+    // Withheld uncertain fields are still visible for review, but not displayed as extracted facts.
+    if(source.layoutVersion)for(const [i,warning] of source.warnings.entries()){
+      if(source.entities?.some(e=>e.warnings.some(w=>w.message===warning.message)))continue;
+      sections.push({id:"review-"+record.id+"-"+(source.logicalDocumentId??"file")+"-"+i,
+        title:"Source extraction review",rows:[{id:"warning-"+i,label:warning.field??"Extraction",
+          value:"NOT CONFIRMED",status:"missing",required:true,note:warning.message,
+          evidence:(source.fieldEvidence[warning.field??""]??[]).map(proof=>({documentId:record.id,
+            logicalDocumentId:source.logicalDocumentId,fileName:record.fileName,documentType:source.documentType,
+            field:warning.field??"",sourceValue:proof.text??"",page:proof.page,confidence:proof.confidence}))} ]});
+    }
+  }
   // All additional parsed fields remain visible even if no insured/carrier mapping yet exists.
-  section("source-index","Additional extracted document fields (including unassigned)",add=>{
-    const included=new Set(sections.flatMap(group=>group.rows.flatMap(row=>row.evidence.map(source=>
-      [source.documentId,source.logicalDocumentId,source.field].join("|")))));
+  {
+    const included=new Set(sections.flatMap(group=>group.rows.flatMap(row=>row.evidence.map(proof=>
+      [proof.documentId,proof.logicalDocumentId,proof.entityId,proof.field].join("|")))));
+    const rows:WorksheetRow[]=[];
     for(const {record,source} of active){
-      for(const [key,value] of Object.entries(source.data??{})){
-        if(!available(value)||included.has([record.id,source.logicalDocumentId,key].join("|")))continue;
-        add("raw-"+record.id+"-"+(source.logicalDocumentId??"file")+"-"+key,
-          source.documentType+" · "+key,value,[key],{required:false,
-            subjectType:source.subjectType as "DRIVER"|"VEHICLE"|"PROPERTY"|undefined,
-            subjectId:source.subjectId,note:"Additional parsed value: check source/association before key-in."});
+      if(source.entityId)continue;
+      for(const [field,value] of Object.entries(source.data??{})){
+        if(!available(value)||included.has([record.id,source.logicalDocumentId,source.entityId,field].join("|")))continue;
+        const evidence=(source.fieldEvidence[field]??[]).map(proof=>({documentId:record.id,
+          logicalDocumentId:source.logicalDocumentId,fileName:record.fileName,documentType:source.documentType,
+          field,sourceValue:proof.text??stringify(value),page:proof.page,confidence:proof.confidence}));
+        rows.push({id:"raw-"+record.id+"-"+(source.logicalDocumentId??"file")+"-"+field,
+          label:record.fileName+" - "+field,value:stringify(value),status:evidence.length?"extracted":"case-only",
+          evidence,required:false,note:"This source only; not merged with another file or assigned to another person/vehicle."});
       }
     }
-  });
+    if(rows.length)sections.push({id:"source-index",title:"Additional extracted document fields (including unassigned)",rows});
+  }
   const rows=sections.flatMap(group=>group.rows);
   const unparsedDocuments=records.filter(record=>!active.some(p=>p.record.id===record.id)).map(record=>record.fileName);
   return {kind:isChange?(auto?"auto-change":"home-change"):(auto?"new-auto":"new-home"),
