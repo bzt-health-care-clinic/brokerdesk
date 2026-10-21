@@ -251,3 +251,7 @@ button,a,input,textarea,[role="button"],[tabindex] { -webkit-tap-highlight-color
 .auditor-evidence-source small {color:var(--muted-foreground,#59636c);}
 .auditor-evidence-source a {text-decoration:underline;}
 @media(max-width:760px){.auditor-worksheet-main{grid-template-columns:1fr;gap:4px;}.auditor-worksheet-state{text-align:left;}}
+
+/* Auditor worksheet can exceed several viewports: size tabs by content rather than shrinking flex children into a large empty scroll tail. */
+.keyin-panel { display:block; }
+.keyin-panel .case-tabs { min-height:auto; }
