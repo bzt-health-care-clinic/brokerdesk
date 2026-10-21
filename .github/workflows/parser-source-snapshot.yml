@@ -22,16 +22,16 @@ jobs:
         shell: bash
         run: |
           set -eu
-          mkdir vendor
+          mkdir -p parser-deps
           for package in pdfjs-dist @napi-rs/canvas @napi-rs/canvas-linux-x64-gnu; do
             version=$(node -e 'const l=require("./package-lock.json");console.log(l.packages["node_modules/"+process.argv[1]].version)' "$package")
-            npm pack --ignore-scripts --pack-destination vendor "$package@$version"
+            npm pack --ignore-scripts --pack-destination parser-deps "$package@$version"
           done
       - uses: actions/upload-artifact@v4
         with:
           name: parser-source
           path: |
             parser-source.zip
-            vendor/*.tgz
+            parser-deps/*.tgz
           retention-days: 1
           if-no-files-found: error
