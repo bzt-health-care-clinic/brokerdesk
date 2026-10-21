@@ -5,8 +5,15 @@ import { ownershipFields } from "./ownership-fields.ts";
 const CRITICAL_FIELD_CONFIDENCE = .9;
 export const EXTRACTION_PIPELINE_VERSION = 2;
 export const PARSER_VERSION = 5;
-// All document types were expanded for Auditor handoff; reparse saved local OCR text once.
-export function requiredParserVersion(_record: UploadedDocumentRecord) { return PARSER_VERSION; }
+// Reparse only sources whose structured fields changed; binary proof photos and
+// signature-only files do not need OCR to remain valid supporting evidence.
+export function requiredParserVersion(record: UploadedDocumentRecord) {
+  const kinds=[record.documentType,...(record.logicalDocuments??[]).map(s=>s.documentType),
+    ...(record.packagePages??[]).map(page=>page.classification.documentType)];
+  const expanded=new Set<DocumentType>([
+    "AUTO_APPLICATION","AUTO_QUOTE","HAB_APPLICATION","HAB_QUOTE","POLICY_CHANGE"]);
+  return kinds.some(type=>isDriverReport(type)||expanded.has(type))?PARSER_VERSION:3;
+}
 
 export function invalidateStaleExtraction(record: UploadedDocumentRecord): UploadedDocumentRecord {
   if (!record.raw && !record.parsed && !record.packagePages?.length && !record.parsedSources?.length) return record;

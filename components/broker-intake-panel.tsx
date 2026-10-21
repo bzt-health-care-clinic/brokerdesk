@@ -181,7 +181,7 @@ export function BrokerIntakePanel({data,records,onChange}:Props){
           {vehicle.ownership?.leased&&<label>Lessor name (from permit) <input
             aria-label={"Broker vehicle "+(index+1)+" lessor"}
             value={vehicle.ownership?.lessor?.name??""}
-            onChange={event=>changeVehicle(vehicle.id!,"lessor",event.target.value)}/></label>
+            onChange={event=>changeVehicle(vehicle.id!,"lessor",event.target.value)}/></label>}
         </div>
         <Button size="sm" variant="outline" onClick={()=>{
           if(window.confirm("Remove vehicle from the submission?"))
