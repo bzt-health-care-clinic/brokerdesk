@@ -1,0 +1,26 @@
+name: Parser code-only isolated test snapshot
+on:
+  push:
+    branches: [feature/broker-auditor-lan-pilot]
+    paths: [.github/workflows/parser-source-snapshot.yml]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Archive only tracked source and synthetic tests
+        shell: bash
+        run: |
+          set -eu
+          git archive --format=zip --output=parser-source.zip HEAD lib local-server app components scripts tests package.json package-lock.json tsconfig.json vite.config.ts .github/workflows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parser-source
+          path: parser-source.zip
+          retention-days: 1
+          if-no-files-found: error
