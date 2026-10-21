@@ -505,7 +505,7 @@ export default function Home() {
   const newCaseTypeSelector = <div className="type-toggle" aria-label="New case type">
     <button className={selectedNewCaseType === "AUTO" ? "active" : ""} aria-pressed={selectedNewCaseType === "AUTO"} onClick={() => setSelectedNewCaseType("AUTO")}>New Auto</button>
     <button className={selectedNewCaseType === "HAB" ? "active" : ""} aria-pressed={selectedNewCaseType === "HAB"} onClick={() => setSelectedNewCaseType("HAB")}>New HAB</button>
-    <button className={selectedNewCaseType === "POLICY_CHANGE" ? "active" : ""} aria-pressed={selectedNewCaseType === "POLICY_CHANGE"} onClick={() => setSelectedNewCaseType("POLICY_CHANGE")}>Auto Policy Change</button>
+    <button className={selectedNewCaseType === "POLICY_CHANGE" ? "active" : ""} aria-pressed={selectedNewCaseType === "POLICY_CHANGE"} onClick={() => setSelectedNewCaseType("POLICY_CHANGE")}>Policy Change</button>
     <button className={selectedNewCaseType === "HOME_POLICY_CHANGE" ? "active" : ""} aria-pressed={selectedNewCaseType === "HOME_POLICY_CHANGE"} onClick={() => setSelectedNewCaseType("HOME_POLICY_CHANGE")}>Home Policy Change</button>
   </div>;
 
