@@ -13,6 +13,14 @@ const bad = (message, status = 400, blockers) => Object.assign(new Error(message
 const safePart = value => String(value ?? "").trim().replace(/[^a-zA-Z0-9_-]+/g, "").slice(0, 55);
 const isChange = item => ["auto_policy_change", "home_policy_change"].includes(item?.case_type);
 const freshId = prefix => prefix + randomUUID().replaceAll("-", "");
+// Must stay byte-for-byte equivalent to lib/active-evidence.ts sectionRevision.
+// Remapped import section IDs change the identity hash: only rewrite matching,
+// previously active source revisions, never revive stale extraction references.
+const sourceSectionRevision = section => JSON.stringify([
+  section.physicalFileId, section.id, section.documentType, section.startPage ?? 1,
+  section.endPage ?? section.startPage ?? 1, section.subjectType ?? "",
+  section.subjectId ?? "", section.subjectName ?? ""
+]);
 const normalizeTypes = item => {
   const types = item.policy_change?.transaction_types ?? [];
   const first = types.length ? types[0] : undefined;
@@ -236,11 +244,37 @@ export class SubmissionPilotService {
       package_id: manifest.package_id, source_case_id: item.case_id, revision: manifest.revision,
       broker_id: manifest.broker.id, broker_name: manifest.broker.name, submitted_at: manifest.submitted_at,
     };
+    const mappedRevisions = new Map();
     const storedRecords = records.map(record => {
       const mapped = mapReferences(record);
       delete mapped.package_file_path;
+      const originalSections = new Map((record.logicalDocuments ?? []).map(section=>[section.id,section]));
+      const newSections = new Map((mapped.logicalDocuments ?? []).map(section=>[section.id,section]));
+      const remapParsedSource = (source, before) => {
+        if (!before?.logicalDocumentId || !source?.logicalDocumentId) return source;
+        const original=originalSections.get(before.logicalDocumentId);
+        const translated=newSections.get(source.logicalDocumentId);
+        if (!original || !translated) return source;
+        const previous=sourceSectionRevision(original);
+        if (before.sourceRevision && before.sourceRevision !== previous)
+          return source; // Stale prior extraction stays stale, not revalidated.
+        if (!before.sourceRevision) return source; // Legacy fallback still observes section timestamps.
+        const current=sourceSectionRevision(translated);
+        mappedRevisions.set(source.logicalDocumentId,current);
+        return {...source,sourceRevision:current};
+      };
+      mapped.parsedSources=(mapped.parsedSources??[]).map((source,index)=>
+        remapParsedSource(source,(record.parsedSources??[])[index]));
+      if(mapped.parsed) mapped.parsed=remapParsedSource(mapped.parsed,record.parsed);
       return { mapped, originalPath: record.package_file_path };
     });
+    for (const field of importedCase.field_sources ?? []) {
+      for (const value of field.values ?? []) {
+        if (value.logicalDocumentId && value.sourceRevision &&
+            mappedRevisions.has(value.logicalDocumentId))
+          value.sourceRevision=mappedRevisions.get(value.logicalDocumentId);
+      }
+    }
     const packagesDir = resolve(this.paths.base, "packages");
     mkdirSync(packagesDir, { recursive: true });
     const target = resolve(packagesDir, safeId(manifest.package_id) + ".bdzip");
