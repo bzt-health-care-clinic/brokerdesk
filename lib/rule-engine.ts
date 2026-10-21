@@ -9,6 +9,7 @@ import type {
   RuleConfig,
 } from "./insurance-types.ts";
 import { DEFAULT_RULE_CONFIG } from "./insurance-types.ts";
+import { sameNamedPersons } from "./intake-person-evidence.ts";
 import { isPolicyChange, runPolicyChangeRules } from "./policy-change.ts";
 import { canonicalFieldKey } from "./field-keys.ts";
 
@@ -78,8 +79,9 @@ export function checkNamedInsured(data: InsuranceCase): Alert[] {
   const permits = data.vehicles.length ? data.vehicles.map((_, index) => [vehicleOwnership(data, index), index] as const) : [[data.ownership?.received ? data.ownership : undefined, 0] as const];
   return permits.flatMap(([permit, index]) => {
     if (!permit) return [];
-    const owners = [permit.registered_owner, ...(permit.additional_owners ?? [])].filter(Boolean).map(norm);
-    return owners.length && data.insured.name && owners.includes(norm(data.insured.name)) ? []
+    const owners = [permit.registered_owner, ...(permit.additional_owners ?? [])].filter(Boolean);
+    return owners.length && data.insured.name &&
+      owners.some(owner=>sameNamedPersons([owner],[data.insured.name])) ? []
       : [alert("OWNER_MISMATCH", "high", `Registered owner or named insured is missing or does not match for ${data.vehicles.length ? vehicleLabel(data, index) : "the Ownership source"}.`, `vehicles.${index}.registered_owner`, source(data, "registered_owner"))];
   });
 }
@@ -99,11 +101,12 @@ export function checkOwnershipCompleteness(data: InsuranceCase): Alert[] {
 }
 
 export function checkCoInsured(data: InsuranceCase): Alert[] {
-  if (!isAuto(data) || !data.insured.co_insured.length) return [];
+  if (!isAuto(data) || !(data.insured.co_insured??[]).length) return [];
   return data.vehicles.flatMap((_, index) => {
     const permit = vehicleOwnership(data, index); if (!permit?.registered_owner) return [];
-    const owners = [permit.registered_owner, ...(permit.additional_owners ?? [])].map(norm);
-    return data.insured.co_insured.filter(person => !owners.includes(norm(person.name))).map(person => alert(
+    const owners = [permit.registered_owner, ...(permit.additional_owners ?? [])];
+    return (data.insured.co_insured??[]).filter(person =>
+      !owners.some(owner=>sameNamedPersons([owner],[person.name]))).map(person => alert(
       "COINSURED_REVIEW", "medium", `Confirm why ${person.name} is jointly named although ${vehicleLabel(data, index)} records only ${permit.registered_owner} as owner.`, `vehicles.${index}.co_insured`, source(data, "co_insured")));
   });
 }

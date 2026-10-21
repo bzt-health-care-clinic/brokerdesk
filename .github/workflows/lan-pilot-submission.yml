@@ -56,6 +56,10 @@ jobs:
         run: |
           node --experimental-transform-types tests/intake-v1-support.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Broker file-intake and Auditor structured worksheet regressions
+        run: |
+          node --experimental-transform-types tests/auditor-role-split.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Signed authorization and existing case completion regression
         run: |
           node --experimental-transform-types tests/signed-verification.ts

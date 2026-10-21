@@ -53,6 +53,11 @@ jobs:
         run: |
           node --experimental-transform-types tests/pilot-browser.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Pilot Broker file-only Chromium smoke (synthetic case)
+        timeout-minutes: 7
+        run: |
+          node --experimental-transform-types tests/broker-role-browser.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Report missing harness output
         if: always()
         run: |

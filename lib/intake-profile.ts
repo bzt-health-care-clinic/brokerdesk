@@ -10,8 +10,8 @@ import { changeSignersValid, insuredPersonNames, isCancellationChange, nameCompa
 import type { ChangeSignerAttestation } from "./intake-person-evidence.ts";
 import { checkDiscountSupport, checkOpcfSupport, evaluateIntakeWarnings } from "./intake-support-evidence.ts";
 
-export const INTAKE_PROFILE_VERSION = { "new-business": "new-business-v1.2", "policy-change": "policy-change-v1.2" } as const;
-export const INTAKE_RULE_ENGINE_VERSION = "brokerdesk-rules-20261016-full-v1";
+export const INTAKE_PROFILE_VERSION = { "new-business": "new-business-v1.3", "policy-change": "policy-change-v1.3" } as const;
+export const INTAKE_RULE_ENGINE_VERSION = "brokerdesk-rules-20261021-role-split";
 export type IntakeSystem = "new-business" | "policy-change";
 export interface IntakeFinding { code: string; message: string; field?: string; document_id?: string; vehicle_id?: string }
 export interface IntakeResult {
@@ -98,9 +98,20 @@ export function evaluateIntakeProfile(
     findings.push({ code, message, ...(field ? {field} : {}), ...(vehicle_id ? {vehicle_id} : {}), ...(document_id ? {document_id} : {}) });
   const item = applyDocumentPresence(original, records);
   const ruleAlerts = [...runRules(item, DEFAULT_RULE_CONFIG), ...runPhase3Rules(item), ...reviewUploadedDocuments(item, records).alerts];
-  // MVR received date is explicitly excluded from intake; all other HIGH rules remain.
+  // Broker file gate: preserve evidence integrity, source conflicts, identity,
+  // Ownership/VIN, signed forms, group proof and document correctness.
+  // Key-in completion, claims/convictions rating, premium differences and UW referral
+  // remain Auditor work after import, not prerequisites for Broker file submission.
+  const auditorOnly = new Set([
+    "REQUIRED_DRIVER_MISSING","MVR_RECEIVED_DATE_MISSING","MVR_CONVICTION_MISMATCH",
+    "CLAIM_MISSING","PREMIUM_DISCREPANCY","COVERAGE_MISSING",
+    "PRIOR_POLICY_ACTIVE","QUOTE_NUMBER_LINE_OF_BUSINESS_CONFLICT",
+  ]);
   for (const a of ruleAlerts) if (!a.resolved && a.severity === "high" &&
-    a.code !== "MVR_RECEIVED_DATE_MISSING") push(a.code, a.message, a.field);
+    !auditorOnly.has(a.code) &&
+    !(a.field === "policy_change.uw_status" && a.code === "SUPPORTING_DOCUMENT_MISSING")) {
+    push(a.code,a.message,a.field);
+  }
 
   // Document presence is derived from current ACTIVE evidence, not a checklist
   // boolean supplied by the broker or package author.

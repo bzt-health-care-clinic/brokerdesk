@@ -71,7 +71,7 @@ const numeric = (value: unknown) => {
 };
 
 
-const driverFields = new Set(["driverName", "dob", "licenceNumber", "licenceClass", "g1Date", "g2Date", "gDate", "expiryDate", "demeritPoints", "requestDate", "releaseDate", "replyDate", "receivedDate", "issueDate", "licenceStatus", "conditions", "convictions", "reportId", "reportDate"]);
+const driverFields = new Set(["driverName", "dob", "licenceNumber", "licenceClass", "g1Date", "g2Date", "gDate", "expiryDate", "demeritPoints", "requestDate", "releaseDate", "replyDate", "receivedDate", "issueDate", "licenceStatus", "conditions", "convictions", "reportId", "reportDate","licenceProvince"]);
 const vehicleFields = new Set(["registeredOwner", "ownerAddress", "vin", "year", "make", "model", "plate", "lessor", "lienholder", "vehicleUse", "annualKm", "commuteKm"]);
 const supportId = (source: ParsedSource) => JSON.stringify([source.documentId, source.logicalDocumentId, source.sourceRevision]);
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -79,7 +79,7 @@ const nonempty = (v: unknown) => v !== undefined && v !== null && v !== "";
 
 function association(data: InsuranceCase, source: ParsedSource, field: string) {
   if (source.claimRecordId && field.startsWith("claim.")) return { type: "CLAIM", lob: "AUTO", id: source.claimRecordId, primary: !data.case_type.includes("home") };
-  const type = driverFields.has(field) ? "DRIVER" : vehicleFields.has(field) ? "VEHICLE" : ["propertyInsuredSince", "continuouslyInsuredSince", "occupiedSince", "riskAddress", "numberOfMortgages", "mortgagee", "mortgageeAddress", "natureOfInterest", "lossPayee", "policyType"].includes(field) ? "PROPERTY" : "POLICY";
+  const type = driverFields.has(field) ? "DRIVER" : vehicleFields.has(field) ? "VEHICLE" : ["propertyInsuredSince", "continuouslyInsuredSince", "occupiedSince", "riskAddress", "numberOfMortgages", "mortgagee", "mortgageeAddress", "natureOfInterest", "lossPayee", "policyType","occupancy","structure","construction","exteriorFinish","yearBuilt","families","units","livingArea","bedrooms","bathrooms","garage","roof","plumbing","electrical","heating","smokeFree","swimmingPool","dogExposure","rental","airbnb","vacant","businessUse"].includes(field) ? "PROPERTY" : "POLICY";
   const lob = source.lineOfBusiness ?? (/HAB|PROPERTY|MORTGAGE/.test(source.documentType) ? "HAB" : /AUTO|OWNERSHIP|MVR|DASH|VEHICLE|LEASE|FINANCE/.test(source.documentType) ? "AUTO" : data.case_type.includes("home") ? "HAB" : "AUTO");
   const primaryLob = data.case_type.includes("home") ? "HAB" : "AUTO";
   if (type === "POLICY" || type === "PROPERTY") return { type, lob, id: type === "POLICY" ? data.policy.id! : data.habitational_risk?.id, primary: lob === primaryLob };
@@ -104,13 +104,24 @@ function slot(data: InsuranceCase, path: string[]): { target: Record<string, unk
   }
   return value && typeof value === "object" ? { target: value as Record<string, unknown>, key: path.at(-1)! } : undefined;
 }
-const policyPaths: Record<string, string[]> = { insurer: ["policy", "company"], quoteNumber: ["policy", "quote_number"], effectiveDate: ["policy", "effective_date"], namedInsured: ["insured", "name"], priorInsurer: ["prior_insurance", "insurer"], priorPolicyNumber: ["prior_insurance", "policy_number"], priorEffective: ["prior_insurance", "effective_date"], priorExpiry: ["prior_insurance", "expiry_date"] };
-const driverPaths: Record<string, string> = { licenceClass: "licence_class", g1Date: "g1_date", g2Date: "g2_date", gDate: "g_date", requestDate: "mvr_requested", releaseDate: "mvr_release_date", replyDate: "mvr_reply_date", receivedDate: "mvr_received", issueDate: "mvr_issue_date", expiryDate: "licence_expiry", licenceStatus: "licence_status", conditions: "licence_conditions", demeritPoints: "mvr_demerit_points", convictions: "mvr_convictions" };
+const policyPaths: Record<string, string[]> = { insurer: ["policy", "company"], quoteNumber: ["policy", "quote_number"], effectiveDate: ["policy", "effective_date"], namedInsured: ["insured", "name"], priorInsurer: ["prior_insurance", "insurer"], previousInsurer: ["prior_insurance", "insurer"], priorPolicyNumber: ["prior_insurance", "policy_number"], priorEffective: ["prior_insurance", "effective_date"], priorExpiry: ["prior_insurance", "expiry_date"], insuredSince: ["prior_insurance", "insured_since"], dateWithCompany: ["prior_insurance", "date_with_company"], continuousInsurance: ["prior_insurance", "continuous_insurance"] };
+const driverPaths: Record<string, string> = { licenceProvince: "licence_province", licenceClass: "licence_class", g1Date: "g1_date", g2Date: "g2_date", gDate: "g_date", requestDate: "mvr_requested", releaseDate: "mvr_release_date", replyDate: "mvr_reply_date", receivedDate: "mvr_received", issueDate: "mvr_issue_date", expiryDate: "licence_expiry", licenceStatus: "licence_status", conditions: "licence_conditions", demeritPoints: "mvr_demerit_points", convictions: "mvr_convictions" };
 const vehiclePaths: Record<string, string> = { vin: "vin", vehicleUse: "primary_use", annualKm: "annual_km", commuteKm: "commute_km" };
 const ownershipPaths: Record<string, string> = { registeredOwner: "registered_owner", ownerAddress: "address", vin: "vin", year: "year", make: "make", model: "model", plate: "plate", lessor: "lessor", lienholder: "lienholder" };
 const habPropertyPaths: Record<string, string[]> = {
   riskAddress: ["habitational_risk", "risk_address"], policyType: ["habitational_risk", "policy_type"], occupiedSince: ["habitational_risk", "occupied_since"],
   propertyInsuredSince: ["prior_insurance", "insured_since"], continuouslyInsuredSince: ["prior_insurance", "continuous_insurance"],
+  occupancy:["habitational_risk","occupancy"],structure:["habitational_risk","structure"],
+  construction:["habitational_risk","construction"],exteriorFinish:["habitational_risk","exterior_finish"],
+  yearBuilt:["habitational_risk","year_built"],families:["habitational_risk","families"],
+  units:["habitational_risk","units"],livingArea:["habitational_risk","living_area"],
+  bedrooms:["habitational_risk","bedrooms"],bathrooms:["habitational_risk","bathrooms"],
+  garage:["habitational_risk","garage"],roof:["habitational_risk","roof"],
+  plumbing:["habitational_risk","plumbing"],electrical:["habitational_risk","electrical"],
+  heating:["habitational_risk","heating"],smokeFree:["habitational_risk","smoke_free"],
+  swimmingPool:["habitational_risk","swimming_pool"],dogExposure:["habitational_risk","dog_animal_exposure"],
+  rental:["habitational_risk","rental"],airbnb:["habitational_risk","airbnb"],
+  vacant:["habitational_risk","vacant"],businessUse:["habitational_risk","business_use"],
   numberOfMortgages: ["mortgage", "number_of_mortgages"], mortgagee: ["mortgage", "mortgagees", "0", "name"], mortgageeAddress: ["mortgage", "mortgagees", "0", "address"], natureOfInterest: ["mortgage", "nature_of_interest"], lossPayee: ["mortgage", "loss_payees", "0", "name"],
 };
 
@@ -217,7 +228,16 @@ export function reconcileDocumentsIntoCase(current: InsuranceCase, records: Uplo
     }
     if (resolved !== null && item.status !== "conflict" && !item.associationReview) for (const path of paths) {
       const at = slot(next, path); if (!at || blocked.has(JSON.stringify(path))) continue;
-      const value = ["year", "annualKm", "commuteKm", "premium", "demeritPoints", "numberOfMortgages"].includes(field) ? numeric(resolved) : field === "lessor" || field === "lienholder" ? { name: String(resolved), address: "" } : resolved;
+      const numericFields=new Set(["year","annualKm","commuteKm","premium","demeritPoints",
+        "numberOfMortgages","yearBuilt","families","units","livingArea","bedrooms","bathrooms"]);
+      const boolFields=new Set(["smokeFree","swimmingPool","rental","airbnb","vacant"]);
+      const val=typeof resolved==="string"?resolved.trim().toUpperCase():resolved;
+      const boolValue=typeof resolved==="boolean"?resolved:typeof val==="string"?
+        /^(YES|TRUE|Y|1)$/.test(val)?true:/^(NO|FALSE|N|0)$/.test(val)?false:undefined:undefined;
+      const value=numericFields.has(field)?numeric(resolved):
+        boolFields.has(field)?boolValue:field==="lessor"||field==="lienholder"?
+          {name:String(resolved),address:""}:resolved;
+      if(value===undefined||value===null)continue;
       if (manual || priorTargets.some(t => same(t.path, path)) || !nonempty(at.target[at.key]) || same(at.target[at.key], value)) {
         const baseline = old?.appliedTargets?.find(t => same(t.path, path))?.previousValue ?? at.target[at.key] ?? null;
         at.target[at.key] = value;

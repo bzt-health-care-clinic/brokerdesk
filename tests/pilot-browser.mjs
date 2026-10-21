@@ -136,6 +136,13 @@ try {
   await page.getByRole("button",{name:"Open Case"}).waitFor();
   await page.getByRole("button",{name:"Open Case"}).click();
   await page.getByText("SYNTHETIC PILOT CLIENT").first().waitFor({timeout:60000});
+  await page.getByRole("tab",{name:"Worksheet"}).waitFor({timeout:30000});
+  await page.getByRole("heading",{name:/New Home.*Key-in data/}).waitFor({timeout:30000});
+  await page.getByText("1 · Policy / quote / insured").waitFor();
+  assert.equal(await page.getByRole("tab",{name:"Worksheet"}).getAttribute("data-state"),"active",
+    "Auditor must open source-linked key-in worksheet by default, not Broker submission UI");
+  assert.equal(await page.getByText("File intake & accuracy check").count(),0,
+    "Broker-only intake workspace must not appear on the Auditor console");
   assert.equal(pilot.listInbox("new-business")[0].status,"in_progress");
   assert.equal(pilot.listInbox("policy-change").length,0);
   assert.equal(repo.listDocuments(pilot.listInbox("new-business")[0].case_id).length,2);
