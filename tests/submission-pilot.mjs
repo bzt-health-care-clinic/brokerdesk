@@ -9,6 +9,8 @@ import { SubmissionPilotService } from "../local-server/submission-service.mjs";
 import { readBdzip, createBdzip } from "../local-server/bdzip.mjs";
 import { createBlankHabCase, createBlankPolicyChangeCase, createBlankAutoCase } from "../lib/case-factories.ts";
 import { evaluateIntakeProfile } from "../lib/intake-profile.ts";
+import { activeParsedSources, sectionRevision } from "../lib/active-evidence.ts";
+import { buildAuditorWorksheet } from "../lib/auditor-worksheet.ts";
 import { createHash } from "node:crypto";
 
 const root=mkdtempSync(join(tmpdir(),"brokerdesk-submission-pilot-"));
@@ -85,6 +87,22 @@ try {
   repo.upsertCase({case:home},"CREATE_CASE");
   addDoc(home,"HAB_APPLICATION","HABSIGNED");
   addDoc(home,"HAB_QUOTE","HABQUOTE");
+  // Source text metadata must survive the physical document/section ID remap on import.
+  const quoteDoc=repo.listDocuments(home.case_id).find(doc=>doc.id==="HABQUOTE");
+  const quoteSection=quoteDoc.logicalDocuments.find(section=>section.id==="HABQUOTES");
+  const quoteSource={
+    documentId:quoteDoc.id,logicalDocumentId:quoteSection.id,
+    sourceRevision:sectionRevision(quoteSection),documentType:"HAB_QUOTE",
+    parsedAt:new Date().toISOString(),confidence:1,
+    data:{namedInsured:"SYNTHETIC HOME PERSON",riskAddress:"1 Fake Sample Road",
+      occupancy:"Owner Occupied",structure:"Detached"},
+    warnings:[],fieldEvidence:{riskAddress:[{page:1,text:"1 Fake Sample Road",confidence:1}],
+      occupancy:[{page:1,text:"Owner Occupied",confidence:1}]}
+  };
+  repo.updateDocument(quoteDoc.id,{...quoteDoc,parserVersion:5,extractionVersion:2,
+    parsedSources:[quoteSource]});
+  assert.equal(activeParsedSources(repo.listDocuments(home.case_id)
+    .find(doc=>doc.id==="HABQUOTE")).length,1);
   assert.throws(()=>pilot.exportCase(home.case_id,{id:"PILOT-BROKER-1",name:"Synthetic Broker One"}),/hard blockers/);
   const pending=repo.getCase(home.case_id);
   const signed=repo.saveSignedCase(home.case_id,{
@@ -117,6 +135,19 @@ try {
   assert.equal(received.signed,true);
   assert(repo.signedEvidenceStillValid(received));
   assert.equal(repo.listDocuments(imported.case_id).length,2);
+  const importedQuote=repo.listDocuments(imported.case_id)
+    .find(doc=>doc.documentType==="HAB_QUOTE");
+  assert(importedQuote,"Imported Quote file must be retained.");
+  assert.notEqual(importedQuote.id,"HABQUOTE","Auditor uses fresh document IDs.");
+  const importedActive=activeParsedSources(importedQuote);
+  assert.equal(importedActive.length,1,"Valid Broker parsed sources must remain active after ID remapping.");
+  assert.equal(importedActive[0].data.occupancy,"Owner Occupied");
+  const importedWorksheet=buildAuditorWorksheet(received,repo.listDocuments(imported.case_id));
+  assert.equal(importedWorksheet.kind,"new-home");
+  const occupancyRow=importedWorksheet.sections.flatMap(group=>group.rows)
+    .find(row=>row.id==="property-occupancy");
+  assert.equal(occupancyRow.value,"Owner Occupied");
+  assert(occupancyRow.evidence.some(source=>source.documentId===importedQuote.id&&source.page===1));
   assert.equal(pilot.listInbox("new-business").length,1);
   assert(pilot.listInbox("new-business")[0].warnings.some(w=>w.code==="INTAKE_QUOTE_AGE"));
   assert.equal(pilot.listInbox("policy-change").length,0);
