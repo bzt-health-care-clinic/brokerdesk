@@ -25,12 +25,13 @@ export interface ReviewedKeyinResponse {
 }
 const API=process.env.NEXT_PUBLIC_BROKERDESK_LOCAL_API_URL??"http://127.0.0.1:47831";
 
-/** 404 is a LEGACY v0.3 import; do not label it Broker-confirmed. */
+/** A known Case with no imported review returns 204; older local APIs may use 404.
+ * Neither response can be labelled Broker-confirmed. */
 export async function fetchAuditorReviewedKeyin(caseId:string):Promise<ReviewedKeyinResponse|null> {
   const response=await fetch(`${API}/cases/${encodeURIComponent(caseId)}/reviewed-keyin`, {
     cache:"no-store"
   });
-  if(response.status===404)return null;
+  if(response.status===204 || response.status===404)return null;
   if(!response.ok){
     const error=(await response.json().catch(()=>null)) as {error?:unknown}|null;
     throw new Error(typeof error?.error==="string"?error.error:

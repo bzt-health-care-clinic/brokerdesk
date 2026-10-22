@@ -147,7 +147,14 @@ try {
     "Broker-only intake workspace must not appear on the Auditor console");
   assert.equal(pilot.listInbox("new-business")[0].status,"in_progress");
   assert.equal(pilot.listInbox("policy-change").length,0);
-  assert.equal(repo.listDocuments(pilot.listInbox("new-business")[0].case_id).length,2);
+  const legacyCaseId=pilot.listInbox("new-business")[0].case_id;
+  assert.equal(repo.listDocuments(legacyCaseId).length,2);
+  // An existing legacy Case with no reviewed snapshot is an empty optional
+  // resource, not an HTTP failure that contaminates A–E browser acceptance.
+  const legacyReview=await fetch(api+"/cases/"+legacyCaseId+"/reviewed-keyin");
+  assert.equal(legacyReview.status,204,"Legacy Case must use no-content response.");
+  const unknownReview=await fetch(api+"/cases/UNKNOWN-CASE-ID/reviewed-keyin");
+  assert.equal(unknownReview.status,404,"Unknown Case must remain a real 404.");
   // V0.4 REAL INTEGRATION: Broker-reviewed cancellation travels through the UI
   // upload, import and Auditor worksheet. The existing v0.3 Home case above
   // confirms the legacy source-extraction workflow stays unconfirmed.
@@ -202,6 +209,9 @@ try {
   const v04Imported=await v04Resp.json();
   assert.equal(v04Imported.imported,true);
   assert.equal(v04Imported.system,"policy-change");
+  const confirmedReview=await fetch(api+"/cases/"+v04Imported.case_id+"/reviewed-keyin");
+  assert.equal(confirmedReview.status,200,"Imported v0.4 must return the confirmed worksheet.");
+  assert.equal((await confirmedReview.json()).sheet.brokerReview,"BROKER_CONFIRMED");
   await page.getByRole("heading",{name:"Policy Change queue"}).waitFor({timeout:30000});
   await page.getByRole("button",{name:"Take Case"}).click();
   await page.getByRole("button",{name:"Open Case"}).waitFor({timeout:30000});

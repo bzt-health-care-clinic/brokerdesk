@@ -71,7 +71,21 @@ export const server = http.createServer(async (request, response) => {
     const confirmedSheet = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/reviewed-keyin$/);
     if (confirmedSheet && request.method === "GET") {
       if (brokerOnly) return sendJson(response,request,403,{error:"Auditor mode required."});
-      return sendJson(response,request,200,pilot.readReviewedKeyin(confirmedSheet[1]));
+      const caseId = confirmedSheet[1];
+      // No Broker-confirmed sheet is normal for an existing v0.3/local Case.
+      // Return an empty SUCCESS response so normal worksheet loading does not
+      // generate console/network 404 failures; unknown Cases still return 404.
+      if (!db.prepare("SELECT 1 FROM cases WHERE id=? AND deleted_at IS NULL").get(caseId))
+        return sendJson(response,request,404,{error:"Case not found."});
+      try {
+        return sendJson(response,request,200,pilot.readReviewedKeyin(caseId));
+      } catch (error) {
+        if (error?.status === 404) {
+          response.writeHead(204,headers(request));
+          return response.end();
+        }
+        throw error;
+      }
     }
     const preflight = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/preflight$/);
     if (preflight && request.method === "GET")
