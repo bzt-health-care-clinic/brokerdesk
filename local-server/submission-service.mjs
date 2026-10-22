@@ -4,6 +4,7 @@ import { basename, join, resolve } from "node:path";
 import { authoritativeIntake } from "./intake-bridge.mjs";
 import { createBdzip, readBdzip } from "./bdzip.mjs";
 import { BrokerReviewService } from "./broker-review-integration.mjs"; // STEP3_V04_IMPORT
+import { projectBrokerReviewedCase } from "./reviewed-case-projection-stage3b.mjs"; // STEP3B_CASE_PROJECTION
 import {
   REVIEWED_V04, prepareReviewedExport, validateArchiveReviewedSnapshot,
   freezeReviewedExportInTransaction, ensureAuditorReviewedSchema, prepareAuditorReviewedRecord,
@@ -81,9 +82,18 @@ export class SubmissionPilotService {
   preflight(caseId) {
     const item = this.repo.getCase(safeId(caseId));
     if (!item) throw bad("Case not found.", 404);
-    const intake = authoritativeIntake(item, this.repo.listDocuments(item.case_id));
-    if (!this.reviewedV04 || !intake.passed) return intake;
+    if (!this.reviewedV04)
+      return authoritativeIntake(item, this.repo.listDocuments(item.case_id));
     const reviewStatus = this.brokerReview.read(item.case_id);
+    const projection = reviewStatus.review && reviewStatus.ready &&
+      reviewStatus.sourceIssues.length===0 && reviewStatus.fieldIssues.length===0
+      ? projectBrokerReviewedCase(item,reviewStatus.review) : null;
+    const intake = authoritativeIntake(projection?.item??item,
+      this.repo.listDocuments(item.case_id));
+    if (projection?.issues.length)
+      return {...intake,passed:false,blockers:[...(intake.blockers??[]),
+        ...projection.issues.map(message=>({code:"BROKER_CASE_PROJECTION",message}))]};
+    if (!intake.passed) return intake;
     if (reviewStatus.review && reviewStatus.ready &&
         reviewStatus.sourceIssues.length===0 && reviewStatus.fieldIssues.length===0)
       return intake;
@@ -100,7 +110,7 @@ export class SubmissionPilotService {
   
   }
   exportCase(caseId, broker = {}) {
-    const item = this.repo.getCase(safeId(caseId));
+    let item = this.repo.getCase(safeId(caseId));
     if (!item) throw bad("Case not found.", 404);
     const brokerId = String(broker.id ?? "").trim(), brokerName = String(broker.name ?? "").trim();
     if (!/^[A-Za-z0-9_-]{3,60}$/.test(brokerId) || !brokerName || brokerName.length > 120)
@@ -125,6 +135,16 @@ export class SubmissionPilotService {
       const path = `documents/${entryName.slice(0, 150)}${ext}`;
       files.push({ path, bytes, document_id: record.id });
       sourceRecords.push({ ...record, package_file_path: path });
+    }
+    if (this.reviewedV04) {
+      const currentReview = this.brokerReview.read(item.case_id);
+      if (currentReview.review && currentReview.ready &&
+          currentReview.sourceIssues.length===0 && currentReview.fieldIssues.length===0) {
+        const projection = projectBrokerReviewedCase(item,currentReview.review);
+        if (projection.issues.length) throw bad("Broker-reviewed corrections cannot safely be mapped to the Case.",422,
+          projection.issues.map(message=>({code:"BROKER_CASE_PROJECTION",message})));
+        item = projection.item;
+      }
     }
     const preflight = authoritativeIntake(item, originals);
     if (!preflight.passed) throw bad("Intake has unresolved hard blockers; package was not generated.", 422, preflight.blockers);
