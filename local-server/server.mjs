@@ -8,6 +8,7 @@ import { SubmissionPilotService } from "./submission-service.mjs";
 import { ocrSpaceHealth, requestOcrSpace } from "./ocr-space.mjs";
 import { loadLocalEnvironment } from "./env-loader.mjs";
 import { localAllowedOrigins } from "./origins.mjs";
+import { BrokerReviewService } from "./broker-review-integration.mjs"; // STEP2_BROKER_REVIEW_IMPORT
 
 loadLocalEnvironment();
 
@@ -22,6 +23,7 @@ migrateSourceHashBaselines(db, paths.base);
 migrateLogicalDocuments(db);
 const repositories = new LocalRepositories(db, paths);
 const pilot = new SubmissionPilotService(db, paths, repositories);
+const brokerReview = new BrokerReviewService(db, repositories); // STEP2_BROKER_REVIEW_SERVICE
 const brokerOnly = process.env.BROKERDESK_MODE === "broker";
 repositories.cleanTemp();
 const host = "127.0.0.1";
@@ -57,6 +59,14 @@ export const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/ocr-space") { const form = await readForm(request); const file = form.get("file"); if (!(file instanceof File)) throw Object.assign(new Error("File is required"), { status: 400, code: "OCR_INVALID_INPUT" }); try { const raw = await requestOcrSpace(file, { pageCount: form.get("pageCount"), startPage: form.get("startPage"), endPage: form.get("endPage"), isTable: form.get("isTable") === "true" }); return sendJson(response, request, 200, raw); } catch (error) { return sendJson(response, request, error.status || 502, { error: error.message, code: error.code || "OCR_PROVIDER_ERROR" }); } }
     // Pilot v0.3: still LOOPBACK only. LAN exposure requires HTTPS and
     // authenticated Auditor sessions in a later rollout.
+    // STEP2_BROKER_REVIEW_ROUTE: local Broker draft; not a BDZIP approval.
+    const reviewRoute = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/broker-review(?:\/(rebuild|fields|sections|remarks-preview))?$/);
+    if (reviewRoute) {
+      if (!brokerOnly) return sendJson(response, request, 403, { error: "Broker Review is only available in Broker mode." });
+      const result = brokerReview.handle(reviewRoute[1], reviewRoute[2] || "",
+        request.method, ["GET","HEAD"].includes(request.method) ? null : await readJson(request));
+      return sendJson(response, request, result.status, result.body);
+    }
     const preflight = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/preflight$/);
     if (preflight && request.method === "GET")
       return sendJson(response, request, 200, pilot.preflight(preflight[1]));

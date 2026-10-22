@@ -133,6 +133,8 @@ export function SubmissionPanel({data,records,saveState,onCaseSaved,onNavigate}:
       <strong>Broker submission · Pilot</strong>
       <small>Intake profile v1 · Manual email attachment</small>
     </div>
+    {/* STEP2_BROKER_REVIEW_LINK: local draft is NOT in BDZIP until Step 3. */}
+    {process.env.NEXT_PUBLIC_BROKERDESK_MODE==="broker"&&<p><a href={`/broker-review?caseId=${encodeURIComponent(data.case_id)}`} className="underline font-semibold">Open Broker Key-in Review pages</a></p>}
     {!change && <div className="pilot-auth-control">
       <p><strong>Signed Application vs Quote — named policyholders</strong></p>
       {data.named_insured_comparison ?

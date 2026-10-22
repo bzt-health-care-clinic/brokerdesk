@@ -48,6 +48,14 @@ jobs:
         run: |
           node --test tests/broker-keyin-review.test.mjs tests/remarks-generator.test.mjs tests/reviewed-keyin-package.test.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Broker Review Step 2 SQLite/source/API regressions
+        run: |
+          node --check local-server/broker-review-integration.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check local-server/broker-review-source.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test tests/broker-review-step2.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Geometric Applied, MVR and DASH parser regression (synthetic only)
         run: |
           node --experimental-transform-types tests/layout-parsers.mjs

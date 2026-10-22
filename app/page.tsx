@@ -532,7 +532,7 @@ export default function Home() {
         </div>
       </header>
 
-      <div className="priority-strip"><div><span className="live-dot" /> {brokerMode?"Broker file intake":validationStarted?"Auditor validation live":"Auditor worksheet ready"}</div><p>{brokerMode?"Check source completeness, client / VIN identity and signed evidence; Auditor handles full Key-in.":!validationStarted?"Organized source values appear in the Worksheet tab. Resolve missing and conflicting fields before key-in.":critical.length?"Resolve "+critical.length+" critical items before key-in.":"Open Worksheet to review source values and missing fields."}</p>{newCaseTypeSelector}</div>
+      <div className="priority-strip"><div><span className="live-dot" /> {brokerMode?"Broker file intake":validationStarted?"Auditor validation live":"Auditor worksheet ready"}</div><p>{brokerMode?"Check originals and confirm applicable Key-in review pages before handing the worksheet to Auditor.":!validationStarted?"Organized source values appear in the Worksheet tab. Resolve missing and conflicting fields before key-in.":critical.length?"Resolve "+critical.length+" critical items before key-in.":"Open Worksheet to review source values and missing fields."}</p>{newCaseTypeSelector}</div>
 
       <div className="workspace-grid" style={{ "--documents-panel-width": `${documentsPanelWidth}px` } as React.CSSProperties}>
         <aside className="documents-panel panel">

@@ -59,6 +59,23 @@ try{
   await page.getByRole("heading",{name:"File intake & accuracy check"}).waitFor();
   assert.equal(await page.getByLabel("Broker insurer").inputValue(),"Intact");
   assert.equal(await page.getByLabel("Broker named insured").inputValue(),"SYNTHETIC BROKER CASE");
+  // Step 2 must actually open in Broker mode, persist a field and reload from local SQLite.
+  const savedCaseId=await page.evaluate(()=>window.localStorage.getItem("brokerdesk.lastCaseId"));
+  assert.match(savedCaseId??"",/^[A-Za-z0-9_-]+$/);
+  await page.goto(front+"/broker-review?caseId="+encodeURIComponent(savedCaseId),{waitUntil:"domcontentloaded"});
+  await page.getByRole("heading",{name:"Broker Key-in Review"}).waitFor({timeout:30000});
+  await page.getByRole("button",{name:"Create Review Draft"}).click();
+  await page.getByRole("navigation",{name:"Broker Review pages"}).waitFor({timeout:30000});
+  const insuredInput=page.getByRole("textbox",{name:"Named Insured"});
+  await insuredInput.fill("SYNTHETIC REVIEWED CLIENT");
+  await insuredInput.blur();
+  await page.getByText("Named Insured saved.",{exact:true}).waitFor({timeout:15000});
+  await page.reload({waitUntil:"domcontentloaded"});
+  await page.getByRole("navigation",{name:"Broker Review pages"}).waitFor({timeout:30000});
+  assert.equal(await page.getByRole("textbox",{name:"Named Insured"}).inputValue(),"SYNTHETIC REVIEWED CLIENT");
+  assert.equal(await page.getByText(/current BDZIP still uses the Step 1 package format/i).count(),1);
+  await page.goto(front,{waitUntil:"domcontentloaded"});
+  await page.getByRole("heading",{name:"File intake & accuracy check"}).waitFor({timeout:30000});
   // Broker can create Home Policy Change without receiving the Auditor editing UI.
   await page.getByRole("button",{name:"Home Policy Change"}).click();
   await page.getByRole("button",{name:"Create a new case"}).click();

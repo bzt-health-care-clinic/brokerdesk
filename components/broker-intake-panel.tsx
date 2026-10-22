@@ -89,8 +89,8 @@ export function BrokerIntakePanel({data,records,onChange}:Props){
       <p className="eyebrow">Broker Side · Submission / file verification only</p>
       <h2>File intake & accuracy check</h2>
       <p>Confirm the client, submission type, document identity, VIN and signatures.
-        The Auditor will extract, organize and key in detailed insurance information.
-        Do not enter full MVR, coverage or payment details here.</p>
+        Broker checks originals here, then confirms the applicable Key-in fields in Broker Review.
+        The Auditor will receive Broker-confirmed information after the reviewed BDZIP integration.</p>
     </header>
     <section className="broker-intake-section" aria-label="Submission identity">
       <h3>1 · Identify the submission</h3>
