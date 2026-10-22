@@ -48,6 +48,8 @@ jobs:
         run: |
           node --experimental-transform-types tests/layout-parsers.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-transform-types tests/layout-boundary-safety.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Synthetic broker-auditor package and inbox E2E
         run: |
           node --experimental-transform-types tests/submission-pilot.mjs
@@ -63,6 +65,10 @@ jobs:
       - name: Broker file-intake and Auditor structured worksheet regressions
         run: |
           node --experimental-transform-types tests/auditor-role-split.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-transform-types tests/policy-change.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-transform-types tests/stability-batch2a.ts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Signed authorization and existing case completion regression
         run: |

@@ -74,6 +74,9 @@ export class LayoutReader {
       Math.abs(c.box.x - label.box.x) <= xTolerance).sort((a, b) => bottom(b) - bottom(a));
     const nearest = candidates[0];
     if (!nearest || this.isLabel(nearest)) return undefined;
+    const rivals=candidates.filter(c=>Math.abs(bottom(c)-bottom(nearest))<1 &&
+      !this.isLabel(c) && cleanLayoutText(c.text)!==cleanLayoutText(nearest.text));
+    if(rivals.length)return undefined;
     let chain = [nearest];
     for (let i = 0; i < 2; i++) {
       const current = chain[0];

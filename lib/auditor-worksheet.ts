@@ -56,18 +56,26 @@ export function buildAuditorWorksheet(item:InsuranceCase,records:UploadedDocumen
       if(!target)return false;
       const vin=String(source.data?.vin??"").toUpperCase().replace(/[\s-]/g,"");
       const targetVin=String(target.vin??"").toUpperCase().replace(/[\s-]/g,"");
-      if(vin)return Boolean(targetVin&&vin===targetVin);
-      return item.vehicles.length===1;
+      if(vin)return Boolean(targetVin&&vin===targetVin&&
+        item.vehicles.filter(v=>String(v.vin??'').toUpperCase().replace(/[\s-]/g,'')===vin).length===1);
+      return !source.entityId&&item.vehicles.length===1;
     }
     if(subjectType==="DRIVER"){
       const target=item.drivers.find(d=>d.id===subjectId);
       if(!target)return false;
       const licence=String(source.data?.licenceNumber??"").toUpperCase().replace(/[\s-]/g,"");
       const targetLicence=String(target.licence_number??"").toUpperCase().replace(/[\s-]/g,"");
-      if(licence)return Boolean(targetLicence&&licence===targetLicence);
+      if(licence)return Boolean(targetLicence&&licence===targetLicence&&
+        item.drivers.filter(d=>String(d.licence_number??'').toUpperCase().replace(/[\s-]/g,'')===licence).length===1);
       const named=String(source.data?.driverName??"");
-      if(named)return sameNamedPersons([named],[target.name]);
-      return item.drivers.length===1;
+      if(named)return sameNamedPersons([named],[target.name])&&
+        item.drivers.filter(d=>sameNamedPersons([named],[d.name])).length===1;
+      return !source.entityId&&item.drivers.length===1;
+    }
+    if(subjectType==="PROPERTY"&&source.entityId){
+      const address=(v:unknown)=>String(v??'').normalize('NFKC').toUpperCase().replace(/[^A-Z0-9]/g,'');
+      const actual=address(source.data.riskAddress),target=address(item.habitational_risk?.risk_address);
+      return Boolean(actual&&target&&actual===target);
     }
     return true;
   }

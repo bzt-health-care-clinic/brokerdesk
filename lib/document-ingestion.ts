@@ -6,7 +6,7 @@ import { parseAppliedRating } from "./applied-rating-parser.ts";
 import { parseMvrLayout, parseDashLayout } from "./driver-report-layout.ts";
 const CRITICAL_FIELD_CONFIDENCE = .9;
 export const EXTRACTION_PIPELINE_VERSION = 2;
-export const PARSER_VERSION = 6;
+export const PARSER_VERSION = 7;
 // Reparse only sources whose structured fields changed; binary proof photos and
 // signature-only files do not need OCR to remain valid supporting evidence.
 export function requiredParserVersion(record: UploadedDocumentRecord) {

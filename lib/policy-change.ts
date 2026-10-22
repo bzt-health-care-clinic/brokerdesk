@@ -59,12 +59,19 @@ function uniqueVehicle(data: InsuranceCase, change: { subject_id?: string; subje
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+function matchesDriver(driver: InsuranceCase["drivers"][number], change: { subject_id?: string; subject_name?: string }) {
+  // Missing IDs are not an identity match. An invalid explicit ID must not
+  // fall back to a name that happens to match somebody else.
+  return change.subject_id ? driver.id === change.subject_id :
+    Boolean(change.subject_name && driver.name === change.subject_name);
+}
+
 export function applyPolicyChangeState(data: InsuranceCase): InsuranceCase {
   if (!data.policy_change) return data; const next = structuredClone(data);
   for (const change of next.policy_change!.requested_changes ?? []) {
-    if (change.type === "DELETE_DRIVER") { const matches = next.drivers.filter(driver => driver.id === change.subject_id || driver.name === change.subject_name); if (matches.length === 1) next.drivers = next.drivers.filter(driver => driver !== matches[0]); }
+    if (change.type === "DELETE_DRIVER") { const matches = next.drivers.filter(driver => matchesDriver(driver, change)); if (matches.length === 1) next.drivers = next.drivers.filter(driver => driver !== matches[0]); }
     if (change.type === "DELETE_VEHICLE") { const vehicle = uniqueVehicle(next, change); if (vehicle) next.vehicles = next.vehicles.filter(item => item !== vehicle); }
-    if (change.type === "DRIVER_REASSIGNMENT") { const matches = next.drivers.filter(driver => driver.id === change.subject_id || driver.name === change.subject_name); const vehicle = next.vehicles.filter(item => item.id === change.new_value || item.vin === change.new_value); if (matches.length === 1 && vehicle.length === 1) matches[0].assigned_vehicle = vehicle[0].vin; }
+    if (change.type === "DRIVER_REASSIGNMENT") { const matches = next.drivers.filter(driver => matchesDriver(driver, change)); const vehicle = typeof change.new_value === "string" && change.new_value.trim() ? next.vehicles.filter(item => item.id === change.new_value || item.vin === change.new_value) : []; if (matches.length === 1 && vehicle.length === 1) matches[0].assigned_vehicle = vehicle[0].vin; }
     const vehicle = uniqueVehicle(next, change);
     if (change.type === "ANNUAL_KM_CHANGE" && vehicle && Number.isFinite(Number(change.new_value))) vehicle.annual_km = Number(change.new_value);
     if (change.type === "COMMUTE_CHANGE" && vehicle && Number.isFinite(Number(change.new_value))) vehicle.commute_km = Number(change.new_value);

@@ -62,7 +62,7 @@ const extraLabels = ['Vehicle Type','Single Vehicle MVD','km at Purchase','Anti-
   'Insured with Brokerage Since','Multi-Line Policy','Combined Policy','Multi-Line for all carriers','First-Time Buyer','Date of last NSF',
   'Employer','Date Hired','Full Time','First Name','Middle Name','Last Name','Address','City','Province','Postal Code','Home Phone',
   'Salutation','Middle','Suffix','Consent Given','Type of Consent','Date Owner/Principal','Brokerage Insured','Other Licence Class','Other Licence Date',
-  'Applicant lives with Parents','Description','Date','Charge','Vehicle Involved','TP/BI$','TP/PD$','AB$','Coll$','Other PD$','Duration months','Re-Instate Date'];
+  'Severity','km/h','Applicant lives with Parents','Description','Date','Charge','Vehicle Involved','TP/BI$','TP/PD$','AB$','Coll$','Other PD$','Duration months','Re-Instate Date'];
 const dictionary = [...vehicleSpecs,...driverSpecs,...propertySpecs,...policySpecs,...personSpecs]
   .flatMap(s=>s.labels).concat(headings,extraLabels);
 const dictionaryKeys = new Set(dictionary.map(labelKey));
@@ -100,11 +100,12 @@ function extractSpecs(reader:LayoutReader,sink:Sink,specs:Spec[],from:number,to:
     if(candidate)put(sink,field.key,validValue(candidate.text,field.kind),candidate,blocked);
   }
 }
-function rangeFor(reader:LayoutReader,name:string):[number,number]|undefined{
-  const start=reader.cells.find(c=>labelKey(c.text)===labelKey(name));
+function rangeFor(reader:LayoutReader,name:string,from=-Infinity,to=Infinity):[number,number]|undefined{
+  const start=reader.cells.find(c=>c.box.y>=from && c.box.y<to && labelKey(c.text)===labelKey(name));
   if(!start)return;
-  const end=reader.cells.find(c=>c.box.y>start.box.y+start.box.height && headings.some(h=>labelKey(h)===labelKey(c.text)));
-  return [start.box.y+start.box.height,end?.box.y??Infinity];
+  const end=reader.cells.find(c=>c.box.y>start.box.y+start.box.height && c.box.y<to &&
+    (headings.some(h=>labelKey(h)===labelKey(c.text)) || /^(?:Vehicle|Driver)\s+\d+\s+of\s+\d+\b|^Primary Dwelling\b/i.test(c.text)));
+  return [start.box.y+start.box.height,Math.min(end?.box.y??Infinity,to)];
 }
 /** Applied's geometric value-above-label tables. No positional text fallback on a known table. */
 export function parseAppliedRating(raw:RawExtractedDocument,type:DocumentType):ParsedSource|undefined{
@@ -134,23 +135,33 @@ export function parseAppliedRating(raw:RawExtractedDocument,type:DocumentType):P
         put(entity,'driverName',validValue(name,'person'),header,ownBlocked);
         extractSpecs(reader,entity,driverSpecs,from,to,ownBlocked);
         // Explicit loss/lapse cells remain observations under this driver, not at-fault rulings.
-        for(const section of ['Claims','Lapses']){
-          const range=rangeFor(reader,section);if(!range)continue;
-          const cells:Sink={data:{},fieldEvidence:{},warnings:[]};
-          extractSpecs(reader,cells,[spec('description','Description'),spec('date','Date','date'),
-            spec('reinstated','Re-Instate Date','date'),spec('durationMonths','Duration months','number'),
-            spec('vehicle','Vehicle Involved'),spec('charge','Charge','bool'),spec('collisionLoss','Coll$','money')],range[0],range[1],new Set());
-          if(Object.keys(cells.data).length){const key=section==='Claims'?'declaredClaims':'declaredLapses';
-            entity.data[key]=[cells.data];entity.fieldEvidence[key]=Object.values(cells.fieldEvidence).flat();}
+        for(const section of ['Claims','Lapses','Convictions']){
+          const range=rangeFor(reader,section,from,to);if(!range)continue;
+          const descriptions=reader.find(['Description'],range[0],range[1]);
+          const observations:Record<string,unknown>[]=[];const proofs:FieldEvidence[]=[];
+          for(const [rowIndex,label] of descriptions.entries()){
+            const current=reader.above(label,range[0]);if(!current)continue;
+            const following=descriptions[rowIndex+1];
+            const nextTop=following?(reader.above(following,range[0])?.box.y??following.box.y):range[1];
+            const cells:Sink={data:{},fieldEvidence:{},warnings:[]};
+            extractSpecs(reader,cells,[spec('description','Description'),spec('date','Date','date'),
+              spec('reinstated','Re-Instate Date','date'),spec('durationMonths','Duration months','number'),
+              spec('vehicle','Vehicle Involved'),spec('charge','Charge','bool'),spec('collisionLoss','Coll$','money'),
+              spec('severity','Severity'),spec('speedOverLimit','km/h','number')],current.box.y,nextTop,new Set());
+            entity.warnings.push(...cells.warnings);
+            if(Object.keys(cells.data).length){observations.push(cells.data);proofs.push(...Object.values(cells.fieldEvidence).flat());}
+          }
+          if(observations.length){const key=section==='Claims'?'declaredClaims':section==='Lapses'?'declaredLapses':'declaredConvictions';
+            entity.data[key]=observations;entity.fieldEvidence[key]=proofs;}
         }
       }else if(vehicle){
         extractSpecs(reader,entity,vehicleSpecs,from,to,ownBlocked);
         const description=header.text.split('|').slice(1).join('|').trim();
-        entity.data.vehicleDescription=description;entity.fieldEvidence.vehicleDescription=evidenceOf(header);
+        put(entity,'vehicleDescription',description||undefined,header,ownBlocked);
         const year=description.match(/\b(19\d{2}|20\d{2})\b/);
         if(year)put(entity,'year',Number(year[1]),header,ownBlocked);
         // Coverage observations belong to this vehicle only, including exclusions.
-        const coverageRange=rangeFor(reader,'Coverages');
+        const coverageRange=rangeFor(reader,'Coverages',from,to);
         if(coverageRange){
           const rows=reader.cells.filter(c=>c.box.y>=coverageRange[0]&&c.box.y<Math.min(coverageRange[1],to));
           for(const c of rows){
@@ -158,17 +169,21 @@ export function parseAppliedRating(raw:RawExtractedDocument,type:DocumentType):P
             if(!match)continue;
             const key=/^Bodily/i.test(match[1])?'liability':/^Direct/i.test(match[1])?'dcpdDeductible':/^All Perils/i.test(match[1])?'allPerilsDeductible':undefined;
             if(key)put(entity,key,validValue(match[2],'money'),c,ownBlocked);
+            entity.fieldEvidence.coverages=[...(entity.fieldEvidence.coverages??[]),...evidenceOf(c)];
+            if(c.confidence<.9){entity.warnings.push({code:'NEEDS_REVIEW',field:'coverages',severity:'medium',message:`Coverage row on page ${c.page} has low confidence; value withheld.`});continue;}
             const coverage=(entity.data.coverages??[]) as unknown[];coverage.push({name:match[1],value:match[2]});
-            entity.data.coverages=coverage;entity.fieldEvidence.coverages=[...(entity.fieldEvidence.coverages??[]),...evidenceOf(c)];
+            entity.data.coverages=coverage;
           }
         }
-        const drivers=rangeFor(reader,'Drivers');
+        const drivers=rangeFor(reader,'Drivers',from,to);
         if(drivers){const assigned=reader.cells.filter(c=>c.box.y>=drivers[0]&&c.box.y<drivers[1]&&/\((?:Prn|Occ)\)/i.test(c.text));
-          if(assigned.length){entity.data.declaredOperators=assigned.map(c=>c.text);entity.fieldEvidence.declaredOperators=assigned.flatMap(evidenceOf);}}
+          if(assigned.length){entity.fieldEvidence.declaredOperators=assigned.flatMap(evidenceOf);
+            if(assigned.every(c=>c.confidence>=.9))entity.data.declaredOperators=assigned.map(c=>c.text);
+            else entity.warnings.push({code:'NEEDS_REVIEW',field:'declaredOperators',severity:'medium',message:'Operator rows have low confidence; assignment withheld.'});}}
       }else{
         extractSpecs(reader,entity,propertySpecs,from,to,ownBlocked);
         if(entity.data.ownerOccupied===true){entity.data.occupancy='Owner Occupied';entity.fieldEvidence.occupancy=entity.fieldEvidence.ownerOccupied;}
-        const heating=rangeFor(reader,'Primary Heating');
+        const heating=rangeFor(reader,'Primary Heating',from,to);
         if(heating)extractSpecs(reader,entity,[spec('heating','Type'),spec('heatingYear','Year','year')],heating[0],heating[1],ownBlocked);
       }
       result.entities!.push(entity);
@@ -181,20 +196,23 @@ export function parseAppliedRating(raw:RawExtractedDocument,type:DocumentType):P
       extractSpecs(reader,sink,personSpecs,range[0],range[1],new Set());
       for(const [key,value] of Object.entries(sink.data)){
         const dest=section.startsWith('Co-')?(key==='namedInsured'?'coInsured':'coInsured'+key[0].toUpperCase()+key.slice(1)):key;
-        if(result.data[dest]===undefined){result.data[dest]=value;result.fieldEvidence[dest]=sink.fieldEvidence[key];}
-        else if(JSON.stringify(result.data[dest])!==JSON.stringify(value)){delete result.data[dest];blocked.add(dest);}
+        const proof=sink.fieldEvidence[key]?.[0];
+        if(proof?.boundingBox && proof.page!==undefined)put(result,dest,value,{
+          text:String(proof.text??value),box:proof.boundingBox,page:proof.page,
+          confidence:proof.confidence??0,ids:[]},blocked);
       }
+      result.warnings.push(...sink.warnings);
     }
     for(const section of ['Applicant Information','Co-Applicant Information']){
       const range=rangeFor(reader,section);if(!range)continue;
-      const parts:LayoutCell[]=[];
+      const parts:LayoutCell[]=[];const present=new Set<string>();
       for(const labelName of ['First Name','Middle','Last Name','Suffix']){
         const label=reader.find([labelName],range[0],range[1])[0];
         const cell=label&&reader.above(label,range[0]);
-        if(cell&&validValue(cell.text,'person')!==undefined)parts.push(cell);
+        if(cell&&validValue(cell.text,'person')!==undefined){parts.push(cell);present.add(labelName);}
       }
       // A missing last or first name cannot be silently replaced by a value from another section.
-      if(parts.length>=2){const combined=joinCells(parts);put(result,section.startsWith('Co-')?'coInsured':'namedInsured',combined.text,combined,blocked);}
+      if(present.has('First Name')&&present.has('Last Name')){const combined=joinCells(parts);put(result,section.startsWith('Co-')?'coInsured':'namedInsured',combined.text,combined,blocked);}
     }
     const carrierHeading=reader.cells.find(c=>/\bNew Business\s*\|.*Effective Date/i.test(c.text));
     if(carrierHeading){

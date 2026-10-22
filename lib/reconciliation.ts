@@ -82,6 +82,12 @@ function association(data: InsuranceCase, source: ParsedSource, field: string) {
   const type = source.entityId && ["DRIVER","VEHICLE","PROPERTY"].includes(source.subjectType ?? "") ? source.subjectType! : driverFields.has(field) ? "DRIVER" : vehicleFields.has(field) ? "VEHICLE" : ["propertyInsuredSince", "continuouslyInsuredSince", "occupiedSince", "riskAddress", "numberOfMortgages", "mortgagee", "mortgageeAddress", "natureOfInterest", "lossPayee", "policyType","occupancy","structure","construction","exteriorFinish","yearBuilt","families","units","livingArea","bedrooms","bathrooms","garage","roof","plumbing","electrical","heating","smokeFree","swimmingPool","dogExposure","rental","airbnb","vacant","businessUse"].includes(field) ? "PROPERTY" : "POLICY";
   const lob = source.lineOfBusiness ?? (/HAB|PROPERTY|MORTGAGE/.test(source.documentType) ? "HAB" : /AUTO|OWNERSHIP|MVR|DASH|VEHICLE|LEASE|FINANCE/.test(source.documentType) ? "AUTO" : data.case_type.includes("home") ? "HAB" : "AUTO");
   const primaryLob = data.case_type.includes("home") ? "HAB" : "AUTO";
+  if (type === "PROPERTY" && source.entityId) {
+    const actual=normalizeAddress(String(source.data.riskAddress??""));
+    const expected=normalizeAddress(data.habitational_risk?.risk_address??"");
+    const match=Boolean(actual&&expected&&actual===expected);
+    return {type,lob,id:match?data.habitational_risk?.id:undefined,primary:match&&lob===primaryLob};
+  }
   if (type === "POLICY" || type === "PROPERTY") return { type, lob, id: type === "POLICY" ? data.policy.id! : data.habitational_risk?.id, primary: lob === primaryLob };
   const entities = type === "DRIVER" ? data.drivers : data.vehicles;
   const manual = source.subjectId && source.subjectType === type ? entities.filter(e => e.id === source.subjectId) : [];
@@ -139,7 +145,12 @@ export function reconcileDocumentsIntoCase(current: InsuranceCase, records: Uplo
     const vehicleScope = association(next, { ...source, subjectType: "VEHICLE", subjectId: claim.vehicle_id, data: { vin: claim.vehicle_vin } }, "vin");
     claim.driver_id = driverScope.primary ? driverScope.id : undefined;
     claim.vehicle_id = vehicleScope.primary ? vehicleScope.id : undefined;
-    claim.report_subject_id = association(next, { ...source, data: { ...source.data, licenceNumber: source.data.reportSubjectLicence ?? source.data.licenceNumber } }, "licenceNumber").id;
+    // Each row carries its own report-header identity. Multiple reports in one
+    // file must never inherit the first report's subject or a manual file binding.
+    const reportLicence=Object.prototype.hasOwnProperty.call(row,"report_subject_licence")?
+      (row as Record<string,unknown>).report_subject_licence:source.data.reportSubjectLicence??source.data.licenceNumber;
+    claim.report_subject_id = association(next, { ...source, entityId:undefined,
+      subjectId:undefined,subjectType:"DRIVER",data:{licenceNumber:reportLicence} }, "licenceNumber").id;
     claim.association_status = claim.driver_id ? "ASSIGNED" : "UNASSIGNED";
     activeClaimIds.add(claim.id);
     if (!next.claims.some(c => c.id === claim.id)) next.claims.push({ id: claim.id, loss_date: "", insurer: "", policy_number: "", claim_number: "", coverage: "", loss_amount: null, at_fault_percent: null, status: "", source: claim.source });
