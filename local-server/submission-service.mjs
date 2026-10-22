@@ -183,10 +183,9 @@ export class SubmissionPilotService {
     try {
       if (reviewedExport?.requiresFinalize)
         freezeReviewedExportInTransaction(this.db,reviewedExport,item.case_id,brokerId);
-    }
-    this.db.prepare("INSERT INTO outbound_submissions(package_id,case_id,revision,sha256,filename,created_at) VALUES(?,?,?,?,?,?)")
+      this.db.prepare("INSERT INTO outbound_submissions(package_id,case_id,revision,sha256,filename,created_at) VALUES(?,?,?,?,?,?)")
       .run(packageId, item.case_id, revision, hash(archive), filename, now());
-    this.auditAs("BROKER_PACKAGE_EXPORTED", item.case_id, `BROKER:${brokerId}`,
+      this.auditAs("BROKER_PACKAGE_EXPORTED", item.case_id, `BROKER:${brokerId}`,
       { packageId, revision, system, blockers: 0 });
       this.db.exec("COMMIT");
     } catch(error) { this.db.exec("ROLLBACK"); throw error; }
