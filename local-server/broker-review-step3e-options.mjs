@@ -143,7 +143,7 @@ export function deriveStep3eOptions(item,docs) {
  // This is a list of selected discounts known to the Case, not a fabricated
  // catalogue of all available discounts.
  for(const row of item.intake_discount_review?.selections??[])
-   addDiscount({...row,name:row.kind,selected:true,id:\`\${row.kind}:\${row.subject_key}\`});
+   addDiscount({...row,name:row.kind,selected:true,id:`${row.kind}:${row.subject_key}`});
  const byReportId=new Map();
  for(const context of docs.sources??[]){
    const s=context.observation,data=s?.data;
@@ -183,8 +183,8 @@ export function deriveStep3eOptions(item,docs) {
     }
     if(["MVR","DASH"].includes(s.documentType)){
        const type=s.documentType.toLowerCase();
-       const id=s.logicalDocumentId?\`\${context.record.id}::\${s.logicalDocumentId}\`:context.record.id;
-       if(byReportId.has(\`\${type}:\${id}\`))continue;
+       const id=s.logicalDocumentId?`${context.record.id}::${s.logicalDocumentId}`:context.record.id;
+       if(byReportId.has(`${type}:${id}`))continue;
        const pulled=data.pulledDate??data.requestDate??data.reportDate??null;
        const pulledKey=own(data,"pulledDate")?"pulledDate":
          own(data,"requestDate")?"requestDate":own(data,"reportDate")?"reportDate":null;
@@ -193,7 +193,7 @@ export function deriveStep3eOptions(item,docs) {
        const summary=unresolved?null:(type==="mvr"?mvrSummary(data):dashSummary(data));
        // A report with unresolved parser warnings must not become clean history.
        // Parsed records without dated evidence are not treated as fresh.
-       byReportId.set(\`\${type}:\${id}\`,{
+       byReportId.set(`${type}:${id}`,{
          type,id,pulledDate:validDay(pulled)&&pulledKey&&fieldPage(s,pulledKey)!==null?pulled:null,
          summary
        });
@@ -206,8 +206,8 @@ export function deriveStep3eOptions(item,docs) {
       if(section.presenceStatus!=="FOUND")continue;
       const type=section.documentType==="MVR"?"mvr":section.documentType==="DASH"?"dash":null;
       if(!type)continue;
-      const id=section.id?\`\${record.id}::\${section.id}\`:record.id;
-      const key=\`\${type}:\${id}\`;
+      const id=section.id?`${record.id}::${section.id}`:record.id;
+      const key=`${type}:${id}`;
       if(!byReportId.has(key))byReportId.set(key,{type,id,pulledDate:null,summary:null});
     }
   }
