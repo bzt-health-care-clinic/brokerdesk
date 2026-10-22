@@ -1,0 +1,27 @@
+name: Parser code-only verification snapshot
+on:
+  push:
+    branches: [feature/broker-auditor-lan-pilot]
+    paths: [.github/workflows/parser-source-snapshot.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Archive tracked code only for isolated verification
+        shell: bash
+        run: |
+          set -eu
+          git rev-parse HEAD > parser-source-commit.txt
+          git archive --format=zip --output=parser-source.zip HEAD lib tests local-server scripts app components package.json package-lock.json tsconfig.json vite.config.ts .github/workflows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parser-source-verification
+          path: |
+            parser-source.zip
+            parser-source-commit.txt
+          retention-days: 1
+          if-no-files-found: error
