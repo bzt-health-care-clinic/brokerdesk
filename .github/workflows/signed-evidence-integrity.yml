@@ -2,6 +2,7 @@ name: BrokerDesk signed evidence integrity
 on:
   push:
     branches:
+      - feature/broker-review-step3e
       - "review/signed-evidence-integrity-*"
   pull_request:
     branches:
