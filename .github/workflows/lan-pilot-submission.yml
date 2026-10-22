@@ -34,6 +34,11 @@ jobs:
         run: |
           & .\node_modules\.bin\tsc.cmd --noEmit
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Windows production build (Broker Review Step 2)
+        timeout-minutes: 8
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Server and package syntax
         run: |
           node --check local-server/bdzip.mjs
