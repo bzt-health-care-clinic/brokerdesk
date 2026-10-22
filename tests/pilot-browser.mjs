@@ -183,6 +183,15 @@ try {
   });
   const confirmation=new BrokerReviewService(db,repo);
   let reviewState=confirmation.create(policy.case_id,{actor:"PILOT-BROKER-1"});
+  const originalRemarks=policy.policy_change.notes;
+  const correctedRemarks="Hi U/W, As insured's request, please cancel the auto policy. Effective date: "+
+    today+". Broker confirmed corrected Remarks.";
+  reviewState=confirmation.edit(policy.case_id,{
+    actor:"PILOT-BROKER-1",expectedRevision:reviewState.review.revision,
+    fieldId:"remarks.text",value:correctedRemarks
+  });
+  assert.equal(repo.getCase(policy.case_id).policy_change.notes,originalRemarks,
+    "Browser synthetic Broker Review must preserve the original local Case.");
   for(const section of reviewState.review.sections){
     reviewState=confirmation.confirm(policy.case_id,{
       actor:"PILOT-BROKER-1",expectedRevision:reviewState.review.revision,sectionId:section.id
@@ -193,6 +202,9 @@ try {
   const verifiedBundle=v04Pilot.exportCase(policy.case_id,{id:"PILOT-BROKER-1",name:"Pilot Broker One"});
   assert.equal(verifiedBundle.manifest.package_version,"0.4-reviewed-keyin");
   assert(readBdzip(verifiedBundle.archive).has("reviewed-keyin.json"));
+  assert.equal(JSON.parse(readBdzip(verifiedBundle.archive).get("case.json").toString())
+    .policy_change.notes,correctedRemarks);
+  assert.equal(repo.getCase(policy.case_id).policy_change.notes,originalRemarks);
   const hydratedV04=Promise.all(["new-business","policy-change"].map(channel=>
     page.waitForResponse(response=>response.url()===api+"/inbox?system="+channel &&
       response.request().method()==="GET",{timeout:60000})));
@@ -209,6 +221,7 @@ try {
   const v04Imported=await v04Resp.json();
   assert.equal(v04Imported.imported,true);
   assert.equal(v04Imported.system,"policy-change");
+  assert.equal(repo.getCase(v04Imported.case_id).policy_change.notes,correctedRemarks);
   const confirmedReview=await fetch(api+"/cases/"+v04Imported.case_id+"/reviewed-keyin");
   assert.equal(confirmedReview.status,200,"Imported v0.4 must return the confirmed worksheet.");
   assert.equal((await confirmedReview.json()).sheet.brokerReview,"BROKER_CONFIRMED");
@@ -217,6 +230,7 @@ try {
   await page.getByRole("button",{name:"Open Case"}).waitFor({timeout:30000});
   await page.getByRole("button",{name:"Open Case"}).click();
   await page.getByRole("heading",{name:"Key-in data — Broker confirmed"}).waitFor({timeout:60000});
+  await page.getByText(/Broker confirmed corrected Remarks/).first().waitFor({timeout:15000});
   await page.getByRole("button",{name:"Copy all Key-in data"}).waitFor();
   assert.equal(await page.getByText("Auditor · Imported Broker review").count(),1);
   assert.equal(await page.getByText("Copy section",{exact:true}).count(),

@@ -50,6 +50,14 @@ try {
   assert.equal(broker.preflight(item.case_id).passed,false,'v0.4 rejects missing Broker review');
   assert.throws(()=>broker.exportCase(item.case_id,{id:'PILOT-BROKER-1',name:'Synthetic Broker'}),/blockers|hard|review/i);
   let state=review.create(item.case_id,{actor:'PILOT-BROKER-1'});
+  const originalRemarks=item.policy_change.notes;
+  const correctedRemarks=`Hi U/W,\nAs insured's request, please cancel the auto policy.\nEffective date: ${now}.\nBroker confirmed corrected Remarks.`;
+  assert(state.review.fields.some(field=>field.id==='remarks.text'),
+    'Policy Change Remarks must be present in the Broker Review.');
+  state=review.edit(item.case_id,{actor:'PILOT-BROKER-1',
+    expectedRevision:state.review.revision,fieldId:'remarks.text',value:correctedRemarks});
+  assert.equal(brokerRepo.getCase(item.case_id).policy_change.notes,originalRemarks,
+    'Editing Broker Review must not overwrite the source Case.');
   for(const section of state.review.sections){
     try{state=review.confirm(item.case_id,{actor:'PILOT-BROKER-1',expectedRevision:state.review.revision,sectionId:section.id});}
     catch(e){console.error('REVIEW_SECTION_BLOCKED',section.id,e.blockers??e.message);throw e;}
@@ -61,12 +69,21 @@ try {
   assert(files.has('reviewed-keyin.json'));
   assert.equal(bundle.manifest.reviewed_keyin.sha256,sha(files.get('reviewed-keyin.json')));
   const original=JSON.parse(files.get('reviewed-keyin.json').toString());
+  const outboundCase=JSON.parse(files.get('case.json').toString());
+  assert.equal(outboundCase.policy_change.notes,correctedRemarks,
+    'Step 3B must project confirmed Remarks into the actual archive Case.');
+  assert.equal(brokerRepo.getCase(item.case_id).policy_change.notes,originalRemarks,
+    'Step 3B export must not mutate Broker local Case.');
+  assert.equal(original.fields.find(f=>f.id==='remarks.text')?.value,correctedRemarks,
+    'The immutable Broker snapshot must match its projected Case.');
   assert.equal(original.review_status,'BROKER_CONFIRMED');
   assert.equal(original.finalized_by,'PILOT-BROKER-1');
   assert.equal(review.read(item.case_id).review.review_status,'BROKER_CONFIRMED');
   const imported=auditor.importArchive(bundle.archive,bundle.filename);
   assert.equal(imported.imported,true);
   assert.equal(imported.system,'policy-change');
+  assert.equal(auditorRepo.getCase(imported.case_id).policy_change.notes,correctedRemarks,
+    'Auditor Case must receive the same corrected Remarks.');
   assert.equal(auditor.importArchive(bundle.archive,bundle.filename).duplicate,true);
   const sheet=auditor.readReviewedKeyin(imported.case_id);
   assert.equal(sheet.sheet.brokerReview,'BROKER_CONFIRMED');
