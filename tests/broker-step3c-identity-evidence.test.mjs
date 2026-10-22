@@ -194,13 +194,28 @@ test("reconfirmed updated Ownership can support the corrected VIN",()=>{
 test("stable Driver ID permits Licence correction without assigning another Driver",()=>{
   withFixture(f=>{
     const before=f.item;
+    before.drivers.push({
+      ...structuredClone(before.drivers[0]),
+      id:"SYN-DRIVER-2",name:"JANE SYNTHETIC",
+      licence_number:"J1111-22222-33333"
+    });
     const changed="D9988-77777-00001";
     const outgoing=project(before,{
       "driver:SYN-DRIVER-1.licenceNumber":changed
     });
+    assert.equal(outgoing.drivers.length,2);
     assert.equal(outgoing.drivers[0].id,before.drivers[0].id);
     assert.equal(outgoing.drivers[0].licence_number,changed);
+    assert.equal(outgoing.drivers[1].id,"SYN-DRIVER-2");
+    assert.equal(outgoing.drivers[1].licence_number,"J1111-22222-33333",
+      "A different Driver must retain their licence.");
     assert.equal(before.drivers[0].licence_number,"D1234-56789-01234");
+    assert.equal(f.item.drivers.length,1,"The persisted Broker Case must remain unchanged.");
+    const duplicate=projectBrokerReviewedCase(before,projectionReview(before,{
+      "driver:SYN-DRIVER-1.licenceNumber":before.drivers[1].licence_number
+    }));
+    assert(duplicate.issues.some(issue=>/duplicat/i.test(issue)),
+      "A correction reusing another Driver's licence must not be projected.");
     ensureNo(f.intake(outgoing),[
       "INTAKE_SIGNED_APPLICATION","INTAKE_VEHICLE_OWNERSHIP"
     ]);
