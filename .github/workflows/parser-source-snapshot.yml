@@ -11,17 +11,31 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Archive tracked code only for isolated verification
         shell: bash
         run: |
           set -eu
           git rev-parse HEAD > parser-source-commit.txt
           git archive --format=zip --output=parser-source.zip HEAD lib tests local-server scripts app components package.json package-lock.json tsconfig.json vite.config.ts .github/workflows
+      - name: Fetch exact locked PDF.js package for offline private-file verification
+        shell: bash
+        run: |
+          set -eu
+          version=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("package-lock.json")).packages["node_modules/pdfjs-dist"].version)')
+          mkdir parser-public-dependency
+          cd parser-public-dependency
+          npm pack --ignore-scripts --json "pdfjs-dist@$version" > package-metadata.json
+          cd ..
+          zip -rq parser-public-dependency.zip parser-public-dependency
       - uses: actions/upload-artifact@v4
         with:
           name: parser-source-verification
           path: |
             parser-source.zip
             parser-source-commit.txt
+            parser-public-dependency.zip
           retention-days: 1
           if-no-files-found: error
