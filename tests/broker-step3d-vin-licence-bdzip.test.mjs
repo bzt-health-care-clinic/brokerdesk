@@ -76,7 +76,13 @@ function fixture({ownershipFileVin=NEW_VIN}={}){
   const ids={};
   function upload(type,id,vin){
     const sec=id+"S";
-    const bytes=Buffer.from("SYNTHETIC STEP 3D | "+type+" | "+id+" | "+(vin??"")+"\n");
+    // The synthetic MVR/DASH bytes expressly contain zero-record assertions.
+    // No unreadable report is silently converted to a clean report.
+    const reportFact=type==="MVR"?" | reportedConvictionCount=0 | convictions=[]":
+      type==="DASH"?" | reportedClaimCount=0 | claims=[]":"";
+    const bytes=Buffer.from("SYNTHETIC STEP 3D | "+type+" | "+id+" | "+(vin??"")+reportFact+"\n");
+    const reportData=type==="MVR"?{pulledDate:day,reportedConvictionCount:0,convictions:[]}:
+      type==="DASH"?{pulledDate:day,reportedClaimCount:0,claims:[]}:null;
     const record={
       id,fileName:id+".pdf",mimeType:"application/pdf",size:bytes.length,
       documentType:type,state:"PARSED",
@@ -86,6 +92,11 @@ function fixture({ownershipFileVin=NEW_VIN}={}){
         documentId:id,documentType:type,logicalDocumentId:sec,
         parsedAt:new Date().toISOString(),confidence:1,
         data:{vin},warnings:[],fieldEvidence:{}
+      }]}:reportData?{parsedSources:[{
+        documentId:id,documentType:type,logicalDocumentId:sec,
+        parsedAt:new Date().toISOString(),confidence:1,
+        data:reportData,warnings:[],
+        fieldEvidence:{pulledDate:[{page:1,source:"synthetic-fixture",confidence:1}]}
       }]}:{})
     };
     ids[type]={id,sec,bytes,stored:repo.saveDocument(item.case_id,record,bytes,id+".pdf")};
@@ -239,6 +250,19 @@ test("old VIN Ownership cannot validate a corrected VIN even when Case metadata 
       "Missing Ownership mismatch blocker: "+JSON.stringify(before.blockers));
     assert.throws(()=>f.broker.exportCase(f.caseId,{id:ACTOR,name:"Synthetic Pilot Broker"}),/hard blockers/);
     assert.equal(f.db.prepare("SELECT count(*) AS n FROM outbound_submissions").get().n,0);
+    assert.equal(f.auditor.listInbox("new-business").length,0);
+  } finally {f.close();}
+});
+
+test("Ownership with matching vehicle ID but no readable VIN is rejected by Intake",()=>{
+  const f=fixture({ownershipFileVin:""});
+  try {
+    confirmCorrection(f);
+    const result=f.broker.preflight(f.caseId);
+    assert.equal(result.passed,false);
+    assert(result.blockers.some(b=>b.code==="INTAKE_VEHICLE_OWNERSHIP"),
+      "Missing VIN must not pass using vehicle subjectId: "+JSON.stringify(result.blockers));
+    assert.throws(()=>f.broker.exportCase(f.caseId,{id:ACTOR,name:"Synthetic Pilot Broker"}),/hard blockers/);
     assert.equal(f.auditor.listInbox("new-business").length,0);
   } finally {f.close();}
 });
