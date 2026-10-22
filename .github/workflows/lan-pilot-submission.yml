@@ -44,6 +44,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --check tests/submission-pilot.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Broker Key-in review Step 1 standalone regressions
+        run: |
+          node --test tests/broker-keyin-review.test.mjs tests/remarks-generator.test.mjs tests/reviewed-keyin-package.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Geometric Applied, MVR and DASH parser regression (synthetic only)
         run: |
           node --experimental-transform-types tests/layout-parsers.mjs
