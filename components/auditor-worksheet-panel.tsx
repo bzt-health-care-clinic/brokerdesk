@@ -30,7 +30,11 @@ export function AuditorWorksheetPanel({data,records}:{data:InsuranceCase;records
   const [reviewedState,setReviewedState]=useState<ReviewState>({caseId:data.case_id,kind:"loading"});
   useEffect(()=>{
     let active=true;
-    if(process.env.NEXT_PUBLIC_BROKERDESK_MODE==="broker"){
+    // Only imported BDZIP cases can have a server-owned Broker confirmation.
+    // Normal local cases must not trigger needless HTTP requests, which can
+    // otherwise be aborted during fast tab/case navigation in Chromium.
+    if(process.env.NEXT_PUBLIC_BROKERDESK_MODE==="broker" ||
+        !data.submission_origin?.package_id){
       setReviewedState({caseId:data.case_id,kind:"legacy"});
       return ()=>{active=false;};
     }
@@ -43,7 +47,7 @@ export function AuditorWorksheetPanel({data,records}:{data:InsuranceCase;records
         message:error instanceof Error?error.message:"Imported worksheet unavailable."});
     });
     return ()=>{active=false;};
-  },[data.case_id]);
+  },[data.case_id,data.submission_origin?.package_id]);
   if(reviewedState.caseId!==data.case_id||reviewedState.kind==="loading")
     return <p role="status">Loading imported Auditor worksheet...</p>;
   if(reviewedState.kind==="ready")

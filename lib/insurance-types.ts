@@ -520,6 +520,16 @@ export interface InsuranceCase {
   factConfirmations?: Record<string, { confirmed: boolean; by?: string; at?: string }>;
   provenanceWarnings?: string[];
   case_id: string;
+  /** Server-owned BDZIP provenance for imported Auditor Cases. Ordinary local
+   * Cases have no submission_origin and must not fetch an imported worksheet. */
+  submission_origin?: {
+    package_id: string;
+    source_case_id: string;
+    revision: number;
+    broker_id: string;
+    broker_name: string;
+    submitted_at: string;
+  };
   case_type: CaseType;
   status: CaseStatus;
   validationStatus?: "NOT_STARTED" | "IN_PROGRESS" | "COMPLETE";
