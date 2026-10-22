@@ -135,8 +135,7 @@ insertAfter("local-server/submission-service.mjs",
     this.db.exec("BEGIN IMMEDIATE");
     try {
       if (reviewedExport?.requiresFinalize)
-        freezeReviewedExportInTransaction(this.db,reviewedExport,item.case_id,brokerId);
-    }`);
+        freezeReviewedExportInTransaction(this.db,reviewedExport,item.case_id,brokerId);`);
 insertBefore("local-server/submission-service.mjs",
   '    return { filename, archive, manifest };',
   `      this.db.exec("COMMIT");
