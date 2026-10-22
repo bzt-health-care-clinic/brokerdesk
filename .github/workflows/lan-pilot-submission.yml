@@ -68,6 +68,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --test tests/broker-reviewed-case-projection-step3b.test.mjs tests/broker-reviewed-case-installer-step3b.test.mjs tests/broker-reviewed-case-compat-step3b.test.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # STEP3C_CI: synthetic repository + actual authoritative Intake evidence gates.
+      - name: Broker Step 3C VIN Licence Ownership and signed evidence
+        run: |
+          node --check tests/broker-step3c-identity-evidence.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test tests/broker-step3c-identity-evidence.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       # STEP3_V04_CI: reviewed snapshot bridge, SQLite, and BDZIP checks.
       - name: Broker reviewed v0.4 package and Auditor import
         run: |
