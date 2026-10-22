@@ -57,12 +57,17 @@ function validVehicleOwnership(vehicle: Vehicle, index: number, item: InsuranceC
   const found = activeEvidence(records, "OWNERSHIP");
   // Identical VIN in two vehicles is ambiguous, regardless of matching evidence.
   if (item.vehicles.filter(candidate => normalizeVin(candidate.vin) === vin).length !== 1) return false;
-  return found.some(({record,section}) =>
-    (vehicle.id && section.subjectId === vehicle.id) ||
-    (record.parsedSources ?? []).some(src =>
-      (src.documentType === "OWNERSHIP" && normalizeVin(src.data?.vin) === vin &&
-        (!src.logicalDocumentId || src.logicalDocumentId === section.id)))
-  );
+  return found.some(({record,section}) => {
+    const observedVins = (record.parsedSources ?? [])
+      .filter(src => src.documentType === "OWNERSHIP" &&
+        (!src.logicalDocumentId || src.logicalDocumentId === section.id))
+      .map(src => normalizeVin(src.data?.vin)).filter(Boolean);
+    // A vehicle subject ID binds a source section to a car, but does not override
+    // a contradictory VIN observed in that same Ownership section.
+    if (observedVins.some(observed => observed !== vin)) return false;
+    return Boolean((vehicle.id && section.subjectId === vehicle.id) ||
+      observedVins.includes(vin));
+  });
 }
 export function authorizationEvidenceValid(item: IntakeInsuranceCase, records: UploadedDocumentRecord[]) {
   const auth = item.transaction_authorization;
