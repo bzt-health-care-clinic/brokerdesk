@@ -3,10 +3,11 @@ import { isDriverReport, reportHeader } from "./report-boundaries.ts";
 import type { ClassificationResult, DocumentExtractor, DocumentParser, DocumentType, ExtractionInput, ExtractionProvider, ExtractionWarning, ParsedSource, RawExtractedDocument, UploadedDocumentRecord } from "./extraction-types.ts";
 import { ownershipFields } from "./ownership-fields.ts";
 import { parseAppliedRating } from "./applied-rating-parser.ts";
+import { parseSignedApplication } from "./signed-application-layout.ts";
 import { parseMvrLayout, parseDashLayout } from "./driver-report-layout.ts";
 const CRITICAL_FIELD_CONFIDENCE = .9;
 export const EXTRACTION_PIPELINE_VERSION = 2;
-export const PARSER_VERSION = 7;
+export const PARSER_VERSION = 8;
 // Reparse only sources whose structured fields changed; binary proof photos and
 // signature-only files do not need OCR to remain valid supporting evidence.
 export function requiredParserVersion(record: UploadedDocumentRecord) {
@@ -85,6 +86,13 @@ export function classifyDocument(fileName: string, mimeType: string, text = ""):
     return from("AUTO_APPLICATION", "Filename identifies an auto application.");
   if (/\bowern\s*ship\b/i.test(name))
     return from("OWNERSHIP", "Filename identifies a rotated/scanned Ontario ownership permit.");
+
+  // Formal signed application titles must outrank incidental Quote labels.
+  // These are page-title signals, not proof that every checkbox is parsed.
+  if (/^\s*(?:Ontario Application for Automobile Insurance|APPLICATION FOR AUTOMOBILE INSURANCE|Owner.s Form\s*\(OAF\s*1\))/im.test(text))
+    return from("AUTO_APPLICATION", "Signed Auto application form title; selections still require geometric review.");
+  if (/^\s*(?:HABITATIONAL INSURANCE APPLICATION|APPLICATION FOR HABITATIONAL INSURANCE)/im.test(text))
+    return from("HAB_APPLICATION", "Signed habitational application form title; selections still require geometric review.");
 
   // Applied entity headings are stronger than incidental Winter Tires/Driver Training labels.
   if (/^\s*(?:Vehicle|Driver)\s+\d+\s+of\s+\d+\b/im.test(text) ||
@@ -197,6 +205,8 @@ abstract class KeyValueParser implements DocumentParser<Record<string, unknown>>
   abstract documentType: DocumentType;
   abstract fields: Record<string, string[]>;
   async parse(raw: RawExtractedDocument, context?: { fileName?: string }): Promise<ParsedSource<Record<string, unknown>>> {
+    const signed = ["AUTO_APPLICATION","HAB_APPLICATION"].includes(this.documentType) ? parseSignedApplication(raw,this.documentType) : undefined;
+    if (signed) return signed;
     const layout = ["AUTO_APPLICATION","AUTO_QUOTE","HAB_APPLICATION","HAB_QUOTE"].includes(this.documentType)
       ? parseAppliedRating(raw,this.documentType) : undefined;
     if (layout) return layout;

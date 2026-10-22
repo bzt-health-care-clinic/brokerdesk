@@ -192,7 +192,7 @@ const mixedCache={...record,parserVersion:5,extractionVersion:2,sectionAnalysisV
     {...clean,extractionStatus:'COMPLETE',classification:{documentType:'MVR'}}],
   parsedSources:[{...scoped,logicalDocumentId:'applied-section',data:{annualKm:'WRONG LEGACY FIELD'}}]};
 const refreshedMixed=await refreshParserVersion(mixedCache);
-assert.equal(refreshedMixed.parserVersion,7);
+assert.equal(refreshedMixed.parserVersion,8);
 assert.equal(refreshedMixed.parsedSources.find(s=>s.documentType==='AUTO_QUOTE').entities[0].data.annualKm,12345,
   'A mixed report upgrade must reparse the Applied section too, not only MVR/DASH.');
 console.log('Synthetic Applied geometry, MVR/DASH identity, exclusions and source-page regressions: PASS');

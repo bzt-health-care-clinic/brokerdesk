@@ -50,6 +50,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --experimental-transform-types tests/layout-boundary-safety.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-transform-types tests/signed-application-ocr.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Synthetic broker-auditor package and inbox E2E
         run: |
           node --experimental-transform-types tests/submission-pilot.mjs

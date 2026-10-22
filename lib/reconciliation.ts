@@ -181,13 +181,15 @@ export function reconcileDocumentsIntoCase(current: InsuranceCase, records: Uplo
     const unique = new Set(effective.map(comparison));
     const hasCorrection = entries.some(({ source, key }) => source.corrections?.[key]);
     const manual = old?.status === "resolved" || Boolean(old?.resolved_by_user);
+    const unconfirmedOcr = !manual && !hasCorrection && entries.some(({source,key})=>
+      source.fieldEvidence?.[key]?.some(e=>e.provider === "ocr_space" || e.provider === "paddle_ocr"));
     const changed = Boolean(old && !same(old.values, values));
     const resolved = manual ? old!.resolved_value : unique.size === 1 ? effective[0] : null;
     const item: FieldSource = {
       ...old, field: identity, canonicalField: field, subjectType: bucket?.scope.type ?? old?.subjectType, subjectId: bucket?.scope.id ?? old?.subjectId, lineOfBusiness: bucket?.scope.lob ?? old?.lineOfBusiness,
       values, resolved_value: resolved, status: manual || hasCorrection && unique.size === 1 ? "resolved" : unique.size > 1 ? "conflict" : values.length ? "matched" : "missing",
       associationReview: Boolean(bucket && (!bucket.scope.id || !bucket.scope.primary)),
-      evidenceReview: Boolean(old?.evidenceReview || manual && changed || old && !old.canonicalField && (driverFields.has(field) || vehicleFields.has(field))),
+      evidenceReview: Boolean(unconfirmedOcr || old?.evidenceReview || manual && changed || old && !old.canonicalField && (driverFields.has(field) || vehicleFields.has(field))),
       withdrawnValues: changed ? [...(old?.withdrawnValues ?? []), ...old!.values.filter(v => !values.some(n => same(n, v)))] : old?.withdrawnValues,
       appliedTargets: [],
     };
@@ -237,7 +239,7 @@ export function reconcileDocumentsIntoCase(current: InsuranceCase, records: Uplo
         if (entries.some(e => e.source.documentType === "PORTAL_SCREENSHOT")) paths.push(["premium", "portal_annual"]);
       }
     }
-    if (resolved !== null && item.status !== "conflict" && !item.associationReview) for (const path of paths) {
+    if (resolved !== null && item.status !== "conflict" && !item.associationReview && !unconfirmedOcr) for (const path of paths) {
       const at = slot(next, path); if (!at || blocked.has(JSON.stringify(path))) continue;
       const numericFields=new Set(["year","annualKm","commuteKm","premium","demeritPoints",
         "numberOfMortgages","yearBuilt","families","units","livingArea","bedrooms","bathrooms"]);
