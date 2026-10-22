@@ -21,7 +21,7 @@
   延用现有 `cases(id)`、`audit_events` 结构，事务/版本冲突保护。
 - `local-server/reviewed-keyin-package.mjs`：`reviewed-keyin.json` 
   校验/序列化、原始 ID 保留与 Auditor 显示 ID 重映射的桥接模块。
-- `tests/*.test.mjs`：32 个独立自动测试（含规则边界回归），仅用合成数据。
+- `tests/*.test.mjs`：34 个独立自动测试（含规则边界回归），仅用合成数据。
 
 ### 本阶段**没有**完成的工作（不能当成线上可用）
 
@@ -58,7 +58,7 @@ git status --short
 `node` 使用 v22.13 或更高版本（项目 `package.json` 要求）。
 `node:sqlite` 可能打印 ExperimentalWarning，这是 Node 22 预期提醒。
 
-正确结果：32 tests, 32 pass, 0 fail。
+正确结果：34 tests, 32 pass, 0 fail。
 **不要**把“单元测试全绿”当成跨项目 UI、Windows CI 或生产的最终验收。
 
 如果你还要检查已有项目：
@@ -129,3 +129,7 @@ Step 3：升级 BDZIP Export/Import 到 0.4、ID 重映射、Auditor Sheet 和
 - Auditor 预览未完成 Review 时显示 `DRAFT`，不得伪称 `BROKER_CONFIRMED`。
 - 拦截 Reviewed Package 中重复来源 ID；被保人姓名仅在比较时按 token/标点顺序归一，原文不改。
 - 与现有 `main` / Pilot v0.3 导出或 HTTP 路由**仍未联通**；新增模块可单独 CI 验收，不会改变现有 Broker/Auditor UI。
+
+- 复核修正：空 OPCF 清单代表已确认无附加背书，不应被误判为缺字段；若选了 OPCF 44/44R 必须与车辆确认一致。
+- 复核修正：Quote 中已使用且要求外部证明的折扣，Evidence Present=No 不得通过分区确认。
+- 补充两个相应的合成回归，共 34 项；所有模块仍未接入生产路由，Broker 只负责文件齐全准确核实，完整 Key-in 工作表属于 Auditor。

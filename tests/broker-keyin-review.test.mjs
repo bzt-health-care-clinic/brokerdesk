@@ -169,10 +169,35 @@ test("Manual edits cannot masquerade as machine-extracted evidence",()=>{
 
 test("OPCF 44/44R is optional: an explicit No must not block the Coverage review",()=>{
   const opts=options();
+  opts.coverageByVehicle.v1.opcf=["20"];
   opts.coverageByVehicle.v1.opcf44=false;
   const review=createBrokerReview(caseFixture(),opts);
   assert.equal(review.fields.find(f=>f.id==="vehicle:v1.opcf44").value,false);
   assert.ok(!sectionIssues(review,"coverage","2026-10-22").some(s=>s.includes("opcf44")));
   assert.doesNotThrow(()=>confirmBrokerReviewSection(review,"coverage",{
     actor:"BROKER-1",expectedRevision:review.revision,referenceDate:"2026-10-22"}));
+});
+
+test("No purchased OPCF is valid, while purchased OPCF 44R requires Yes",()=>{
+ const opts=options();
+ opts.coverageByVehicle.v1.opcf=[];
+ opts.coverageByVehicle.v1.opcf44=false;
+ let review=createBrokerReview(caseFixture(),opts);
+ assert.equal(sectionIssues(review,"coverage").length,0);
+ opts.coverageByVehicle.v1.opcf=["44R"];
+ review=createBrokerReview(caseFixture(),opts);
+ assert.ok(sectionIssues(review,"coverage").some(issue=>issue.includes("OPCF 44/44R")));
+ opts.coverageByVehicle.v1.opcf44=true;
+ review=createBrokerReview(caseFixture(),opts);
+ assert.equal(sectionIssues(review,"coverage").length,0);
+});
+test("Selected discount cannot confirm required supporting evidence as missing",()=>{
+ const opts=options();
+ opts.quoteDiscounts=[{id:"winter",name:"Winter Tires",selected:true,
+  evidenceRequired:true,evidencePresent:false}];
+ let review=createBrokerReview(caseFixture(),opts);
+ assert.ok(sectionIssues(review,"coverage").some(issue=>issue.includes("requires its proof")));
+ opts.quoteDiscounts[0].evidencePresent=true;
+ review=createBrokerReview(caseFixture(),opts);
+ assert.equal(sectionIssues(review,"coverage").length,0);
 });
