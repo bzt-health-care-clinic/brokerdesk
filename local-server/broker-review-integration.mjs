@@ -9,6 +9,8 @@ import {
   verifiedReviewDocuments, buildExplicitReviewCandidates, reviewCaseSignature,
   missingPhysicalChecklistDocuments
 } from "./broker-review-source.mjs";
+import {deriveStep3eOptions} from "./broker-review-step3e-options.mjs";
+import {enrichStep3eRemarks} from "./broker-review-step3e-remarks.mjs";
 
 const err=(message,status=409,blockers=[])=>Object.assign(new Error(message),{status,blockers});
 const actorOf=value=>{
@@ -105,7 +107,7 @@ export function deriveRemarksRequest(review,caseData) {
     const found=forAction(["CANCELLATION"]);
     if(found && typeof found==="object")request.cancellation=found;
   }
-  return request;
+  return enrichStep3eRemarks(review,caseData,request);
 }
 export class BrokerReviewService {
   constructor(db,repositories) {
@@ -141,9 +143,10 @@ export class BrokerReviewService {
   createOptions(live) {
     // First pass provides field IDs from Step 1's canonical field directory.
     // The mapper only assigns values with reliable source and subject IDs.
-    const scratch=createBrokerReview(live.item,{sourceFiles:live.docs.verified});
+    const options=deriveStep3eOptions(live.item,live.docs);
+    const scratch=createBrokerReview(live.item,{...options,sourceFiles:live.docs.verified});
     const mapped=buildExplicitReviewCandidates(live.item,scratch.fields,live.docs.sources);
-    return {sourceFiles:live.docs.verified,candidates:mapped.candidates};
+    return {...options,sourceFiles:live.docs.verified,candidates:mapped.candidates};
   }
   saveBinding(caseId,live) {
     this.db.prepare(`INSERT INTO keyin_review_bindings(case_id,case_fingerprint,source_fingerprint,updated_at)

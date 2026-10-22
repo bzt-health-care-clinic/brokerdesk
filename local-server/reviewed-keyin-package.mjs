@@ -6,6 +6,7 @@
  * version bump. Do not ship a mixed old/new importer.
  */
 import { verifyBrokerSnapshot } from "../lib/broker-keyin-review.mjs";
+import {step3eConsistencyIssues} from "./broker-review-step3e-compat.mjs";
 
 export const REVIEWED_KEYIN_PACKAGE_PATH = "reviewed-keyin.json";
 export const REVIEWED_KEYIN_PACKAGE_VERSION = "0.4-reviewed-keyin";
@@ -59,6 +60,7 @@ export function reviewedCaseConsistencyIssues(snapshot, item) {
     if (reviewed!==undefined && normalized(reviewed)!==normalized(vehicle.vin))
       issues.push(`Vehicle ${identifier} VIN differs from Case.`);
   }
+  issues.push(...step3eConsistencyIssues(snapshot,item));
   return issues;
 }
 

@@ -11,6 +11,7 @@
  *  - Step 3A's source fingerprint, section confirmation and hash checks remain
  *    mandatory. This module does NOT replace those checks.
  */
+import {projectStep3eCompatibility} from "./broker-review-step3e-compat.mjs";
 const clone = x => JSON.parse(JSON.stringify(x));
 const same = (a,b) => JSON.stringify(a) === JSON.stringify(b);
 const compactId = x => String(x??"").trim().toUpperCase().replace(/[\s-]/g,"");
@@ -232,5 +233,6 @@ export function projectBrokerReviewedCase(item,review){
       used.add(id);
     }
   }
+  issues.push(...projectStep3eCompatibility(projected,review,changes));
   return {item:projected,changes,issues:[...new Set(issues)]};
 }

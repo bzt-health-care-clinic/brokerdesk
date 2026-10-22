@@ -65,8 +65,9 @@ function validVehicleOwnership(vehicle: Vehicle, index: number, item: InsuranceC
     // A vehicle subject ID binds a source section to a car, but does not override
     // a contradictory VIN observed in that same Ownership section.
     if (observedVins.some(observed => observed !== vin)) return false;
-    return Boolean((vehicle.id && section.subjectId === vehicle.id) ||
-      observedVins.includes(vin));
+    // Step 3E: subjectId alone is NOT proof of the VIN on an unreadable
+    // Ownership. Manual attestation requires a separately byte-bound flow.
+    return observedVins.includes(vin);
   });
 }
 export function authorizationEvidenceValid(item: IntakeInsuranceCase, records: UploadedDocumentRecord[]) {

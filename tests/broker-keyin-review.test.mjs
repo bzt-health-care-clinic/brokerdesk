@@ -39,8 +39,8 @@ function options() {
     collision:{present:false},comprehensive:{present:false},opcf:["20","44"],opcf44:true}},
   quoteDiscountsChecked:true,quoteDiscounts:[{id:"winter",name:"Winter Tires",
     selected:false,evidenceRequired:false}],
-  reports:[{type:"mvr",id:"d1",pulledDate:"2026-09-22",summary:"No convictions"},
-    {type:"dash",id:"case",pulledDate:"2026-09-22",summary:"No claims"}],
+  reports:[{type:"mvr",id:"d1",pulledDate:"2026-09-22",summary:{hasConvictions:false,convictions:[]}},
+    {type:"dash",id:"case",pulledDate:"2026-09-22",summary:{hasClaims:false,claims:[]}}],
   sourceFiles:[{id:"doc1",sha256:sourceDocHash}],
   now:"2026-10-22T12:00:00Z"
  };
