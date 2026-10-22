@@ -32,7 +32,7 @@ export async function fetchAuditorReviewedKeyin(caseId:string):Promise<ReviewedK
   });
   if(response.status===404)return null;
   if(!response.ok){
-    const error=await response.json().catch(()=>({error:"Auditor worksheet unavailable."}));
+    const error=(await response.json().catch(()=>null)) as {error?:unknown}|null;
     throw new Error(typeof error?.error==="string"?error.error:
       `Auditor worksheet failed (${response.status}).`);
   }
