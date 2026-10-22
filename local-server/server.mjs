@@ -67,6 +67,12 @@ export const server = http.createServer(async (request, response) => {
         request.method, ["GET","HEAD"].includes(request.method) ? null : await readJson(request));
       return sendJson(response, request, result.status, result.body);
     }
+    // STEP3_REVIEWED_READ_ROUTE: old v0.3 imports remain unconfirmed.
+    const confirmedSheet = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/reviewed-keyin$/);
+    if (confirmedSheet && request.method === "GET") {
+      if (brokerOnly) return sendJson(response,request,403,{error:"Auditor mode required."});
+      return sendJson(response,request,200,pilot.readReviewedKeyin(confirmedSheet[1]));
+    }
     const preflight = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/preflight$/);
     if (preflight && request.method === "GET")
       return sendJson(response, request, 200, pilot.preflight(preflight[1]));

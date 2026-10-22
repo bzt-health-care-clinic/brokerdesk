@@ -19,7 +19,7 @@ function verifyName(name) {
   if (!name || name.length > 220 || name.includes("\\") || name.startsWith("/") ||
     name.startsWith("./") || /[\u0000-\u001f:]/.test(name) ||
     name.split("/").some(part => !part || part === "." || part === "..")) throw fail("Unsafe ZIP entry path.");
-  if (!/^(?:manifest\.json|case\.json|document-records\.json|documents\/[A-Za-z0-9_.()-]{1,180})$/.test(name))
+  if (!/^(?:manifest\.json|case\.json|document-records\.json|reviewed-keyin\.json|documents\/[A-Za-z0-9_.()-]{1,180})$/.test(name))
     throw fail(`Unexpected ZIP entry path: ${name.slice(0,80)}`);
 }
 export function createBdzip(entries) {

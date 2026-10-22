@@ -3,6 +3,12 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { basename, join, resolve } from "node:path";
 import { authoritativeIntake } from "./intake-bridge.mjs";
 import { createBdzip, readBdzip } from "./bdzip.mjs";
+import { BrokerReviewService } from "./broker-review-integration.mjs"; // STEP3_V04_IMPORT
+import {
+  REVIEWED_V04, prepareReviewedExport, validateArchiveReviewedSnapshot,
+  freezeReviewedExportInTransaction, ensureAuditorReviewedSchema, prepareAuditorReviewedRecord,
+  saveAuditorReviewedRecord, loadAuditorReviewedRecord
+} from "./reviewed-keyin-stage3.mjs";
 import { inside, safeId } from "./paths.mjs";
 
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
@@ -67,11 +73,31 @@ export class SubmissionPilotService {
     this.allowlist = new Set((options.allowedBrokerIds ?? process.env.BROKERDESK_PILOT_BROKER_IDS ??
       "PILOT-BROKER-1,PILOT-BROKER-2").split(",").map(value => value.trim()).filter(Boolean));
     this.pilotAuditor = options.pilotAuditor ?? "AUDITOR-1";
+    this.reviewedV04 = options.reviewedV04 === true ||
+      (options.reviewedV04 ?? process.env.BROKERDESK_REVIEWED_KEYIN_V04) === "1";
+    this.brokerReview = new BrokerReviewService(db, repositories);
+    ensureAuditorReviewedSchema(db);
   }
   preflight(caseId) {
     const item = this.repo.getCase(safeId(caseId));
     if (!item) throw bad("Case not found.", 404);
-    return authoritativeIntake(item, this.repo.listDocuments(item.case_id));
+    const intake = authoritativeIntake(item, this.repo.listDocuments(item.case_id));
+    if (!this.reviewedV04 || !intake.passed) return intake;
+    const reviewStatus = this.brokerReview.read(item.case_id);
+    if (reviewStatus.review && reviewStatus.ready &&
+        reviewStatus.sourceIssues.length===0 && reviewStatus.fieldIssues.length===0)
+      return intake;
+    const reasons = [...reviewStatus.sourceIssues,
+      ...reviewStatus.fieldIssues.map(x=>x.message),
+      ...(reviewStatus.review?.sections??[])
+        .filter(section=>section.status!=="CONFIRMED")
+        .map(section=>section.id+": Broker has not confirmed this page."),
+      ...(reviewStatus.review?[]:["Broker Review has not been created."])];
+    if(!reasons.length)
+      reasons.push("Broker Review confirmation is stale or incomplete; reopen the Review pages.");
+    return {...intake,passed:false,blockers:[...intake.blockers,
+      ...reasons.slice(0,30).map(message=>({code:"BROKER_KEYIN_REVIEW",message}))]};
+  
   }
   exportCase(caseId, broker = {}) {
     const item = this.repo.getCase(safeId(caseId));
@@ -102,6 +128,20 @@ export class SubmissionPilotService {
     }
     const preflight = authoritativeIntake(item, originals);
     if (!preflight.passed) throw bad("Intake has unresolved hard blockers; package was not generated.", 422, preflight.blockers);
+    const submittedAt = now();
+    let reviewedExport = null;
+    if (this.reviewedV04) {
+      const reviewStatus = this.brokerReview.read(item.case_id);
+      if (!reviewStatus.review || !reviewStatus.ready ||
+          reviewStatus.sourceIssues.length || reviewStatus.fieldIssues.length)
+        throw bad("Broker must confirm every Key-in Review section before export.",422,
+          [...reviewStatus.sourceIssues,...reviewStatus.fieldIssues.map(x=>x.message),
+            ...(reviewStatus.review ? [] : ["Broker Review is missing."])].map(message=>({
+              code:"REVIEWED_KEYIN",message
+            })));
+      reviewedExport = prepareReviewedExport(reviewStatus.review,
+        item, sourceRecords, brokerId, submittedAt);
+    }
     const system = isChange(item) ? "policy-change" : "new-business";
     const transactions = system === "policy-change" ? normalizeTypes(item) : [];
     const businessType = system === "policy-change" ? transactions[0].toLowerCase() :
@@ -113,18 +153,20 @@ export class SubmissionPilotService {
       { path: "case.json", bytes: json(item) },
       { path: "document-records.json", bytes: json(sourceRecords) },
       ...files,
+      ...(reviewedExport ? [reviewedExport.entry] : []),
     ];
     const manifest = {
-      package_version: "0.3-pilot",
+      package_version: reviewedExport ? REVIEWED_V04 : "0.3-pilot",
       package_id: packageId, source_case_id: item.case_id, revision,
       client_code: clientCode, company: item.policy.company, filename,
       broker: { id: brokerId, name: brokerName },
-      submitted_at: now(), app_version: "0.1.0", rule_engine_version: preflight.rule_engine_version,
+      submitted_at: submittedAt, app_version: "0.1.0", rule_engine_version: preflight.rule_engine_version,
       intake_profile_version: preflight.profile_version, system,
       primary_transaction_type: transactions[0] ?? null,
       transaction_types: transactions,
       files: payloads.map(file => ({ path: file.path, sha256: hash(file.bytes), bytes: file.bytes.length,
         ...(file.document_id ? { document_id: file.document_id } : {}) })),
+      ...(reviewedExport ? { reviewed_keyin: reviewedExport.manifestReview } : {}),
       preflight: { passed: true, blockers: [], warnings: preflight.warnings },
       signed: { verified: Boolean(item.signed), verified_at: item.signed_verified_at ?? null,
         document_id: item.signed_document_id ?? null, logical_document_id: item.signed_logical_document_id ?? null },
@@ -136,10 +178,18 @@ export class SubmissionPilotService {
       intake_warning_facts: item.intake_warning_facts ?? null,
     };
     const archive = createBdzip([...payloads, { path: "manifest.json", bytes: json(manifest) }]);
+    // Review freeze, outbound record and audit are one atomic SQLite write.
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (reviewedExport?.requiresFinalize)
+        freezeReviewedExportInTransaction(this.db,reviewedExport,item.case_id,brokerId);
+    }
     this.db.prepare("INSERT INTO outbound_submissions(package_id,case_id,revision,sha256,filename,created_at) VALUES(?,?,?,?,?,?)")
       .run(packageId, item.case_id, revision, hash(archive), filename, now());
     this.auditAs("BROKER_PACKAGE_EXPORTED", item.case_id, `BROKER:${brokerId}`,
       { packageId, revision, system, blockers: 0 });
+      this.db.exec("COMMIT");
+    } catch(error) { this.db.exec("ROLLBACK"); throw error; }
     return { filename, archive, manifest };
   }
   auditAs(action, caseId, actor, details = {}) {
@@ -157,7 +207,7 @@ export class SubmissionPilotService {
       records = JSON.parse(parts.get("document-records.json").toString("utf8"));
     } catch { throw bad("Malformed package JSON."); }
     if (!manifest || !item || !Array.isArray(records) ||
-      manifest.package_version !== "0.3-pilot" || !/^[A-Za-z0-9-]{15,60}$/.test(manifest.package_id ?? "") ||
+      !["0.3-pilot",REVIEWED_V04].includes(manifest.package_version) || !/^[A-Za-z0-9-]{15,60}$/.test(manifest.package_id ?? "") ||
       typeof manifest.source_case_id !== "string" || item.case_id !== manifest.source_case_id ||
       !["new-business", "policy-change"].includes(manifest.system) ||
       manifest.system !== (isChange(item) ? "policy-change" : "new-business") ||
@@ -206,9 +256,10 @@ export class SubmissionPilotService {
       if (record.staleExtraction) throw bad("Stale extraction cannot be imported as current evidence.");
       record.currentSourceHash = record.sourceHash;
     }
+    const reviewedSnapshot = validateArchiveReviewedSnapshot(parts,manifest,item,records);
     const profile = authoritativeIntake(item, records);
     if (!profile.passed) throw bad("Auditor-side intake found new or unresolved blockers; package rejected.", 422, profile.blockers);
-    return { manifest, item, records, parts, profile, manifestHash: hash(parts.get("manifest.json")) };
+    return { manifest, item, records, parts, profile, reviewedSnapshot, manifestHash: hash(parts.get("manifest.json")) };
   }
   /**
    * Import is synchronous on the loopback service: all source data and SHA-256
@@ -216,7 +267,7 @@ export class SubmissionPilotService {
    * deleted and cannot appear as accepted inbox items.
    */
   importArchive(archive, originalFilename = "submission.bdzip") {
-    const { manifest, item, records, parts, profile, manifestHash } = this.validateArchive(archive);
+    const { manifest, item, records, parts, profile, reviewedSnapshot, manifestHash } = this.validateArchive(archive);
     const filenameWarning=filenameRoutingWarning(manifest,item,originalFilename);
     if(filenameWarning)profile.warnings=[...profile.warnings,filenameWarning];
     const existing = this.db.prepare("SELECT * FROM imported_packages WHERE package_id=?").get(manifest.package_id);
@@ -230,6 +281,7 @@ export class SubmissionPilotService {
       mapping.set(record.id, freshId("DOC"));
       for (const section of record.logicalDocuments ?? []) mapping.set(section.id, freshId("SEC"));
     }
+    const reviewedRecord = reviewedSnapshot ? prepareAuditorReviewedRecord(reviewedSnapshot,mapping,caseId) : null;
     const mapReferences = value => {
       if (typeof value === "string") return mapping.get(value) ?? value;
       if (Array.isArray(value)) return value.map(mapReferences);
@@ -306,6 +358,7 @@ export class SubmissionPilotService {
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(manifest.package_id,manifestHash,item.case_id,caseId,manifest.revision,
           manifest.system,manifest.broker.id,manifest.broker.name,manifest.submitted_at,now(),
           JSON.stringify(manifest),basename(originalFilename).slice(0,180));
+        if (reviewedRecord) saveAuditorReviewedRecord(this.db,manifest.package_id,caseId,reviewedRecord);
         this.db.prepare("INSERT INTO inbox_tasks(package_id,status,effective_date,warnings_json,updated_at) VALUES(?,?,?,?,?)")
           .run(manifest.package_id,"pending",String(item.policy_change?.change_effective_date ||
             item.policy_change?.requested_effective_date || item.policy?.effective_date || ""),
@@ -324,6 +377,7 @@ export class SubmissionPilotService {
       throw error;
     }
   }
+  readReviewedKeyin(caseId) { return loadAuditorReviewedRecord(this.db,safeId(caseId)); }
   listInbox(system) {
     if (system && !["new-business","policy-change"].includes(system)) throw bad("Unknown inbox channel.");
     return this.db.prepare(`SELECT p.package_id AS package_id,p.source_case_id,p.imported_case_id AS case_id,p.revision,

@@ -1,11 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { InsuranceCase } from "@/lib/insurance-types";
 import type { UploadedDocumentRecord } from "@/lib/extraction-types";
 import { buildAuditorWorksheet, auditorWorksheetText, type WorksheetStatus } from "@/lib/auditor-worksheet";
 import { localRepositories } from "@/lib/local-repositories";
+import { fetchAuditorReviewedKeyin, type ReviewedKeyinResponse } from "@/lib/auditor-reviewed-client";
+import { AuditorReviewedKeyinPanel } from "@/components/auditor-reviewed-keyin-panel"; // STEP3_AUDITOR_SHEET
 
 const STYLES:Record<WorksheetStatus,string>={
   "extracted":"extracted","confirmed":"confirmed","missing":"missing",
@@ -22,6 +24,33 @@ export function AuditorWorksheetPanel({data,records}:{data:InsuranceCase;records
   const [search,setSearch]=useState("");
   const [copied,setCopied]=useState(false);
   const hasContent=sheet.sections.some(section=>section.rows.some(row=>row.status!=="missing"));
+  type ReviewState = {caseId:string;kind:"loading"|"legacy"} |
+    {caseId:string;kind:"ready";data:ReviewedKeyinResponse} |
+    {caseId:string;kind:"error";message:string};
+  const [reviewedState,setReviewedState]=useState<ReviewState>({caseId:data.case_id,kind:"loading"});
+  useEffect(()=>{
+    let active=true;
+    if(process.env.NEXT_PUBLIC_BROKERDESK_MODE==="broker"){
+      setReviewedState({caseId:data.case_id,kind:"legacy"});
+      return ()=>{active=false;};
+    }
+    setReviewedState({caseId:data.case_id,kind:"loading"});
+    void fetchAuditorReviewedKeyin(data.case_id).then(result=>{
+      if(active)setReviewedState(result?{caseId:data.case_id,kind:"ready",data:result}:
+        {caseId:data.case_id,kind:"legacy"});
+    }).catch(error=>{
+      if(active)setReviewedState({caseId:data.case_id,kind:"error",
+        message:error instanceof Error?error.message:"Imported worksheet unavailable."});
+    });
+    return ()=>{active=false;};
+  },[data.case_id]);
+  if(reviewedState.caseId!==data.case_id||reviewedState.kind==="loading")
+    return <p role="status">Loading imported Auditor worksheet...</p>;
+  if(reviewedState.kind==="ready")
+    return <AuditorReviewedKeyinPanel review={reviewedState.data}/>;
+  if(reviewedState.kind==="error")
+    return <p role="alert">Unable to verify imported Broker worksheet: {reviewedState.message}</p>;
+
   async function copy(){
     try{await navigator.clipboard.writeText(auditorWorksheetText(sheet));setCopied(true);}
     catch{setCopied(false);}
