@@ -7,11 +7,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { createBlankHabCase } from "../lib/case-factories.ts";
+import { createBlankHabCase, createBlankPolicyChangeCase } from "../lib/case-factories.ts";
 import { openDatabase } from "../local-server/database.mjs";
 import { resolveDataPaths } from "../local-server/paths.mjs";
 import { LocalRepositories } from "../local-server/repositories.mjs";
 import { SubmissionPilotService } from "../local-server/submission-service.mjs";
+import { BrokerReviewService } from "../local-server/broker-review-integration.mjs";
+import { readBdzip } from "../local-server/bdzip.mjs";
 
 const front="http://127.0.0.1:5193",api="http://127.0.0.1:47843";
 const temp=mkdtempSync(join(tmpdir(),"bd-pilot-ui-"));
@@ -146,8 +148,76 @@ try {
   assert.equal(pilot.listInbox("new-business")[0].status,"in_progress");
   assert.equal(pilot.listInbox("policy-change").length,0);
   assert.equal(repo.listDocuments(pilot.listInbox("new-business")[0].case_id).length,2);
+  // V0.4 REAL INTEGRATION: Broker-reviewed cancellation travels through the UI
+  // upload, import and Auditor worksheet. The existing v0.3 Home case above
+  // confirms the legacy source-extraction workflow stays unconfirmed.
+  const policy=createBlankPolicyChangeCase();
+  const today=new Date().toISOString().slice(0,10);
+  policy.policy.company="Intact";
+  policy.policy.client_code="SYNV04UI";
+  policy.policy.policy_number="SYNTHETIC-POLICY-UI";
+  policy.policy.effective_date=today;
+  policy.insured.name="SYNTHETIC POLICY PERSON";
+  policy.insured.co_insured=[];
+  policy.policy_change.transaction_types=["CANCELLATION"];
+  policy.policy_change.requested_action="Cancellation";
+  policy.policy_change.change_effective_date=today;
+  policy.policy_change.requested_changes=[{
+    id:"synthetic-cancel",type:"CANCELLATION",subject_name:"Whole policy",
+    effective_date:today,new_value:"Cancel on requested effective date"
+  }];
+  policy.policy_change.notes="Hi U/W,\\nAs insured's request, please cancel the auto policy.\\nEffective date: "+today+".";
+  repo.upsertCase({case:policy},"CREATE_CASE");
+  addDocument(repo,policy,"UIV04REQ","CANCELLATION_REQUEST");
+  repo.saveTransactionAuthorization(policy.case_id,{
+    verified:true,documentId:"UIV04REQ",logicalDocumentId:"UIV04REQSEC",
+    signers:[{name:"SYNTHETIC POLICY PERSON",documentId:"UIV04REQ",
+      logicalDocumentId:"UIV04REQSEC",signaturePage:1,verified:true}]
+  });
+  const confirmation=new BrokerReviewService(db,repo);
+  let reviewState=confirmation.create(policy.case_id,{actor:"PILOT-BROKER-1"});
+  for(const section of reviewState.review.sections){
+    reviewState=confirmation.confirm(policy.case_id,{
+      actor:"PILOT-BROKER-1",expectedRevision:reviewState.review.revision,sectionId:section.id
+    });
+  }
+  assert.equal(reviewState.ready,true,"All v0.4 Broker pages must be confirmed.");
+  const v04Pilot=new SubmissionPilotService(db,paths,repo,{reviewedV04:true});
+  const verifiedBundle=v04Pilot.exportCase(policy.case_id,{id:"PILOT-BROKER-1",name:"Pilot Broker One"});
+  assert.equal(verifiedBundle.manifest.package_version,"0.4-reviewed-keyin");
+  assert(readBdzip(verifiedBundle.archive).has("reviewed-keyin.json"));
+  const hydratedV04=Promise.all(["new-business","policy-change"].map(channel=>
+    page.waitForResponse(response=>response.url()===api+"/inbox?system="+channel &&
+      response.request().method()==="GET",{timeout:60000})));
+  await page.goto(front+"/inbox",{waitUntil:"domcontentloaded"});
+  await Promise.all(await hydratedV04);
+  const v04ImportResponse=page.waitForResponse(response=>response.url().includes("/submissions/import") &&
+    response.request().method()==="POST",{timeout:30000});
+  await page.getByLabel("Import BDZIP package").setInputFiles({
+    name:verifiedBundle.filename,mimeType:"application/zip",buffer:verifiedBundle.archive
+  });
+  const v04Resp=await v04ImportResponse;
+  assert.equal(v04Resp.status(),201,
+    "UI must accept the reviewed v0.4 BDZIP: "+(await v04Resp.text()).slice(0,1200));
+  const v04Imported=await v04Resp.json();
+  assert.equal(v04Imported.imported,true);
+  assert.equal(v04Imported.system,"policy-change");
+  await page.getByRole("heading",{name:"Policy Change queue"}).waitFor({timeout:30000});
+  await page.getByRole("button",{name:"Take Case"}).click();
+  await page.getByRole("button",{name:"Open Case"}).waitFor({timeout:30000});
+  await page.getByRole("button",{name:"Open Case"}).click();
+  await page.getByRole("heading",{name:"Key-in data — Broker confirmed"}).waitFor({timeout:60000});
+  await page.getByRole("button",{name:"Copy all Key-in data"}).waitFor();
+  assert.equal(await page.getByText("Auditor · Imported Broker review").count(),1);
+  assert.equal(await page.getByText("Copy section",{exact:true}).count(),
+    reviewState.review.sections.length);
+  assert.equal(v04Pilot.readReviewedKeyin(v04Imported.case_id).sheet.brokerReview,"BROKER_CONFIRMED");
+  assert.equal(browserIssues.filter(x=>x.includes("pageerror")).length,0,
+    "Reviewed v0.4 UI cannot cause a browser JavaScript exception: "+browserIssues.slice(-8));
+
   await context.close();
-  console.log("Pilot Auditor inbox Chromium smoke: PASS");
+  console.log("Pilot Auditor inbox Chromium smoke: PASS (legacy v0.3 + Broker-reviewed v0.4)");
+
 } finally {
   await browser?.close().catch(()=>{});
   db?.close();
