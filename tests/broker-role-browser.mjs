@@ -73,7 +73,8 @@ try{
   await page.reload({waitUntil:"domcontentloaded"});
   await page.getByRole("navigation",{name:"Broker Review pages"}).waitFor({timeout:30000});
   assert.equal(await page.getByRole("textbox",{name:"Named Insured"}).inputValue(),"SYNTHETIC REVIEWED CLIENT");
-  assert.equal(await page.getByText(/current BDZIP still uses the Step 1 package format/i).count(),1);
+  assert.equal(await page.getByText(/BDZIP uses legacy v0\.3 by default/i).count(),1);
+  assert.equal(await page.getByText(/reviewed-keyin\.json is included in the v0\.4 BDZIP/i).count(),1);
   await page.goto(front,{waitUntil:"domcontentloaded"});
   await page.getByRole("heading",{name:"File intake & accuracy check"}).waitFor({timeout:30000});
   // Broker can create Home Policy Change without receiving the Auditor editing UI.

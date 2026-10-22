@@ -281,8 +281,10 @@ export default function BrokerReviewPage() {
           </button>
         </footer>
         <p className="text-xs text-slate-500">
-          This is a Broker local review draft. The current BDZIP still uses the Step 1 package format.
-          Broker confirmations are not yet included in BDZIP until Step 3.
+          Broker Review is saved locally. BDZIP uses legacy v0.3 by default.
+          When BROKERDESK_REVIEWED_KEYIN_V04=1 is enabled on the Broker service,
+          all required pages must be confirmed and reviewed-keyin.json is included in the v0.4 BDZIP.
+          The Auditor still validates original-file hashes, signed evidence and Intake rules.
         </p>
       </section>
     </div>}
