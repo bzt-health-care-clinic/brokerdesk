@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { brokerReviewClient, type BrokerReview, type BrokerReviewStatus, type ReviewField } from "@/lib/broker-review-client";
+import BrokerReviewReportEditor from "@/components/broker-review-report-editor";
+import { reportKind } from "@/lib/broker-review-report-form.mjs";
 
 const roleOptions=[
   ["PRINCIPAL","Principal"],["SECONDARY","Secondary"],["OCCASIONAL","Occasional"],
@@ -36,6 +38,10 @@ export default function BrokerReviewPage() {
   const [actor,setActor]=useState("PILOT-BROKER-1");
   const [draft,setDraft]=useState<Record<string,string>>({});
   const [busy,setBusy]=useState(false);
+  const [reportDirtyIds,setReportDirtyIds]=useState<string[]>([]);
+  const markReportDirty=useCallback((fieldId:string,dirty:boolean)=>{
+    setReportDirtyIds(old=>dirty?(old.includes(fieldId)?old:[...old,fieldId]):old.filter(id=>id!==fieldId));
+  },[]);
   const [savingField,setSavingField]=useState<string|null>(null);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
@@ -63,7 +69,13 @@ export default function BrokerReviewPage() {
   const sectionErrors=data?.fieldIssues.filter(e=>e.sectionId===section?.id)??[];
   const stale=Boolean(data?.sourceIssues.length);
   const isPending=(id:string)=>Object.prototype.hasOwnProperty.call(draft,id);
-  const hasDirty=Object.keys(draft).length>0;
+  const hasDirty=Object.keys(draft).length>0||reportDirtyIds.length>0;
+  useEffect(()=>{
+    if(!hasDirty)return;
+    const warn=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue="";};
+    window.addEventListener("beforeunload",warn);
+    return ()=>window.removeEventListener("beforeunload",warn);
+  },[hasDirty]);
   function display(field:ReviewField) {return isPending(field.id)?draft[field.id]:fieldString(field.value,field.type);}
   async function create() {
     if(!caseId||busy)return;
@@ -81,8 +93,8 @@ export default function BrokerReviewPage() {
     finally{setBusy(false);}
   }
   const persist=async(field:ReviewField,newValue:unknown)=>{
-    if(!caseId||!currentRef.current?.review)return;
-    if(submitting.current)return;
+    if(!caseId||!currentRef.current?.review)return false;
+    if(submitting.current)return false;
     submitting.current=true;setSavingField(field.id);setError("");
     try {
       const rev=currentRef.current.review;
@@ -90,7 +102,8 @@ export default function BrokerReviewPage() {
       setResult(result);
       setDraft(current=>{const next={...current};delete next[field.id];return next;});
       setNotice(`${field.label} saved.`);
-    }catch(e){setError(readError(e));}
+      return true;
+    }catch(e){setError(readError(e));return false;}
     finally {setSavingField(null);submitting.current=false;}
   };
   async function saveText(field:ReviewField) {
@@ -136,6 +149,11 @@ export default function BrokerReviewPage() {
     .map(f=>({id:f.id.slice(7,-5),name:String(f.value??f.id)}))??[];
   const principalNote="Only actual assigned drivers are shown. Select a role or add another driver.";
   const fieldInput=(field:ReviewField)=>{
+    const reportType=field.type==="record"?reportKind(field.id):null;
+    if(reportType)return <BrokerReviewReportEditor
+      key={field.id} fieldId={field.id} kind={reportType}
+      value={field.value} disabled={busy||Boolean(savingField)||stale}
+      onSave={v=>persist(field,v)} onDirtyChange={markReportDirty}/>;
     const match=field.id.match(/^(vehicle:[^.]+)\.(.+)$/);
     const prefix=match?.[1];
     if(prefix&&match?.[2]==="garagingAddress" &&
