@@ -33,7 +33,7 @@ function start(args) {
 async function until(fn,label,timeout=80000) {
   const end=Date.now()+timeout;
   while(Date.now()<end) {
-    if(await fn().catch(()=>false))return;
+    try { if(await fn()) return; } catch { /* retry until ready */ }
     await delay(200);
   }
   throw Error("Step 4A timeout: "+label);
