@@ -235,6 +235,114 @@ try {
   assert.equal(await page.getByText("Auditor · Broker-confirmed Key-in").count(),1);
   assert(await page.getByText("Copy section",{exact:true}).count()>=1);
   assert.equal(v04Pilot.readReviewedKeyin(v04Imported.case_id).sheet.brokerReview,"BROKER_CONFIRMED");
+
+  // STEP4B_BROWSER: render a synthetic two-car/two-driver v0.4 worksheet via
+  // a mocked GET response on the ACTUAL Auditor Case page. This verifies the
+  // React view while the earlier real imported policy-change path verifies
+  // package hashes, SQLite and authoritative Auditor API separately.
+  const syntheticRow=(id,label,value)=>({
+    id,label,originalValue:value,value:typeof value==="string"?value:JSON.stringify(value),
+    evidencePresent:true
+  });
+  const syntheticSection=(id,title,rows)=>({id,title,rows});
+  const structuredSynthetic={
+    packageId:"SYNTHETIC-STEP4B-UI",brokerId:"PILOT-BROKER-1",
+    finalizedAt:new Date().toISOString(),reviewedHash:"SYNTHETIC-REVIEW-HASH",
+    sheet:{
+      sourceCaseId:policy.case_id,sourceReviewHash:"SYNTHETIC-REVIEW-HASH",
+      brokerReview:"BROKER_CONFIRMED",
+      sections:[
+        syntheticSection("policy","Policy",[
+          syntheticRow("policy.insured","Named Insured","SYNTHETIC POLICY PERSON")
+        ]),
+        syntheticSection("drivers","Drivers",[
+          syntheticRow("driver:D1.name","Driver 1 · Name","Synthetic John"),
+          syntheticRow("driver:D2.name","Driver 2 · Name","Synthetic Jane"),
+        ]),
+        syntheticSection("vehicles","Vehicles",[
+          syntheticRow("vehicle:V1.year","VIN-A · Year",2026),
+          syntheticRow("vehicle:V1.make","VIN-A · Make","BMW"),
+          syntheticRow("vehicle:V1.model","VIN-A · Model","X1"),
+          syntheticRow("vehicle:V1.vin","VIN-A · VIN","SYNTHETIC-VIN-A"),
+          syntheticRow("vehicle:V1.driverAssignments","VIN-A · Assigned Drivers",
+            [{driverId:"D1",role:"PRINCIPAL"}]),
+          syntheticRow("vehicle:V2.year","VIN-B · Year",2019),
+          syntheticRow("vehicle:V2.make","VIN-B · Make","Nissan"),
+          syntheticRow("vehicle:V2.model","VIN-B · Model","Rogue"),
+          syntheticRow("vehicle:V2.vin","VIN-B · VIN","SYNTHETIC-VIN-B"),
+          syntheticRow("vehicle:V2.driverAssignments","VIN-B · Assigned Drivers",
+            [{driverId:"D2",role:"SECONDARY"}]),
+        ]),
+        syntheticSection("coverage","Coverage",[
+          syntheticRow("vehicle:V1.liability","VIN-A · Liability",1000000),
+          syntheticRow("vehicle:V1.opcf","VIN-A · Selected OPCF",["20","27"]),
+          syntheticRow("vehicle:V2.liability","VIN-B · Liability",2000000),
+          syntheticRow("vehicle:V2.opcf","VIN-B · Selected OPCF",["43"]),
+          syntheticRow("quoteDiscount:winter.selected","Quote Discount: Winter Tires",true)
+        ]),
+        syntheticSection("history","MVR / DASH / Prior Insurance",[
+          syntheticRow("report:mvr:M1.pulledDate","MVR Pulled Date","2026-10-02"),
+          syntheticRow("report:mvr:M1.summary","MVR Summary",{
+            hasConvictions:true,convictions:[{
+              offenceDate:"2024-04-11",description:"Synthetic speeding",classification:"Minor"
+            }]
+          }),
+          syntheticRow("report:mvr:M2.pulledDate","MVR Pulled Date","2026-10-03"),
+          syntheticRow("report:mvr:M2.summary","MVR Summary",{
+            hasConvictions:false,convictions:[]
+          }),
+          syntheticRow("report:dash:H1.pulledDate","DASH Pulled Date","2026-10-04"),
+          syntheticRow("report:dash:H1.summary","DASH Summary",{
+            hasClaims:true,claims:[
+              {claimNumber:"SYN-CLM-1",lossDate:"2022-01-03",driver:"Synthetic John",
+               vehicle:"SYNTHETIC-VIN-A",atFaultPercent:0},
+              {claimNumber:"SYN-CLM-2",lossDate:"2023-02-04",driver:"Synthetic Jane",
+               vehicle:"SYNTHETIC-VIN-B",atFaultPercent:75}
+            ]
+          }),
+          syntheticRow("prior.insurer","Prior Insurer","Synthetic Prior Carrier")
+        ]),
+        syntheticSection("changes","Requested Changes / Before -> After",[
+          syntheticRow("change:1.type","Change · Type","VEHICLE_SUBSTITUTION"),
+          syntheticRow("change:1.before","Change · Before","2019 Nissan"),
+          syntheticRow("change:1.after","Change · After","2026 BMW X1"),
+        ]),
+        syntheticSection("remarks","UW Remarks",[
+          syntheticRow("remarks.text","UW Remarks","Hi U/W,\nSynthetic line two\nEnd.")
+        ])
+      ]
+    }
+  };
+  await page.route(api+"/cases/"+v04Imported.case_id+"/reviewed-keyin",route=>
+    route.fulfill({status:200,headers:{"access-control-allow-origin":"*",
+      "content-type":"application/json"},body:JSON.stringify(structuredSynthetic)}));
+  const mockedResponse=page.waitForResponse(resp=>resp.url()===
+    api+"/cases/"+v04Imported.case_id+"/reviewed-keyin",{timeout:30000});
+  await page.reload({waitUntil:"domcontentloaded"});
+  await mockedResponse;
+  await page.getByRole("heading",{name:"Ready-to-use Key-in Data"}).waitFor({timeout:30000});
+  const syntheticVehicles=page.locator('section[aria-label="Vehicles / Assigned Drivers / Coverage"]');
+  await syntheticVehicles.waitFor();
+  const carCards=syntheticVehicles.locator("article.auditor-worksheet-entity");
+  assert.equal(await carCards.count(),2,"Two vehicles must render in different Auditor cards");
+  assert.match(await carCards.nth(0).innerText(),/2026 BMW X1/);
+  assert.match(await carCards.nth(0).innerText(),/1000000/);
+  assert.match(await carCards.nth(0).innerText(),/Synthetic John/);
+  assert.doesNotMatch(await carCards.nth(0).innerText(),/2000000/);
+  assert.match(await carCards.nth(1).innerText(),/2019 Nissan Rogue/);
+  assert.match(await carCards.nth(1).innerText(),/2000000/);
+  assert.match(await carCards.nth(1).innerText(),/Synthetic Jane/);
+  assert.doesNotMatch(await carCards.nth(1).innerText(),/1000000/);
+  const historyCard=page.locator('section[aria-label="MVR / DASH / Prior Insurance"]');
+  assert.match(await historyCard.innerText(),/Synthetic speeding/);
+  assert.match(await historyCard.innerText(),/SYN-CLM-1/);
+  assert.match(await historyCard.innerText(),/0%/);
+  assert.match(await historyCard.innerText(),/75%/);
+  const remarkCard=page.locator('section[aria-label="UW Remarks"]');
+  assert.match(await remarkCard.innerText(),/Synthetic line two/);
+  assert.equal(await page.getByText("Copy section",{exact:true}).count(),7);
+  console.log("Step 4B synthetic two-vehicle structured Chromium view: PASS");
+
   assert.equal(browserIssues.filter(x=>x.includes("pageerror")).length,0,
     "Reviewed v0.4 UI cannot cause a browser JavaScript exception: "+browserIssues.slice(-8));
 
