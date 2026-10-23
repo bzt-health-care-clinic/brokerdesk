@@ -7,8 +7,8 @@ export function resolveDataPaths(environment = process.env) {
   const base = configured
     ? resolve(configured)
     : resolve(environment.LOCALAPPDATA || environment.XDG_DATA_HOME || join(homedir(), "AppData", "Local"), "BrokerDesk");
-  const paths = { base, database: join(base, "brokerdesk.db"), documents: join(base, "documents"), backups: join(base, "backups"), temp: join(base, "temp") };
-  for (const directory of [paths.base, paths.documents, paths.backups, paths.temp]) mkdirSync(directory, { recursive: true });
+  const paths = { base, database: join(base, "brokerdesk.db"), documents: join(base, "documents"), packages: join(base, "packages"), backups: join(base, "backups"), temp: join(base, "temp") };
+  for (const directory of [paths.base, paths.documents, paths.packages, paths.backups, paths.temp]) mkdirSync(directory, { recursive: true });
   return paths;
 }
 

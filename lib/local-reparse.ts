@@ -65,9 +65,17 @@ export async function reparseDocument(record: UploadedDocumentRecord, reportsOnl
 }
 export async function refreshParserVersion(record: UploadedDocumentRecord) {
   const sourceChanged = Boolean(record.sourceHash && record.currentSourceHash && record.sourceHash !== record.currentSourceHash);
+  // Do not invalidate non-text supporting documents solely because no OCR text exists.
+  // Changed physical source hashes must still fail closed.
+  if(!sourceChanged && !hasReusableText(record)) {
+    // Non-text proof photos can remain valid. A stale structured answer with no reusable
+    // source text cannot: keep the original file but withdraw its parsed facts.
+    if(record.parsed || record.parsedSources?.length)return reparseDocument(record);
+    return record;
+  }
   const reports = [record.documentType, ...(record.packagePages ?? []).map(p => p.classification.documentType)].some(isDriverReport);
   const boundariesChanged = reports && record.packagePages?.length && record.sectionAnalysisVersion !== SECTION_ANALYSIS_VERSION;
-  return (record.parserVersion ?? 0) < requiredParserVersion(record) || boundariesChanged || sourceChanged ? reparseDocument(record, !sourceChanged && (record.parserVersion ?? 0) >= 3 && reports) : record;
+  return (record.parserVersion ?? 0) < requiredParserVersion(record) || boundariesChanged || sourceChanged ? reparseDocument(record, !sourceChanged && (record.parserVersion ?? 0) >= requiredParserVersion(record) && reports) : record;
 }
 /** Metadata changes only: no extractor/transport is accepted by this function. */
 export async function updateLogicalSections(record: UploadedDocumentRecord, sections: LogicalDocument[]): Promise<UploadedDocumentRecord> {

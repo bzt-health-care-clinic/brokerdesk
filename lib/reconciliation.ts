@@ -71,17 +71,23 @@ const numeric = (value: unknown) => {
 };
 
 
-const driverFields = new Set(["driverName", "dob", "licenceNumber", "licenceClass", "g1Date", "g2Date", "gDate", "expiryDate", "demeritPoints", "requestDate", "releaseDate", "replyDate", "receivedDate", "issueDate", "licenceStatus", "conditions", "convictions", "reportId", "reportDate"]);
+const driverFields = new Set(["driverName", "dob", "licenceNumber", "licenceClass", "g1Date", "g2Date", "gDate", "expiryDate", "demeritPoints", "requestDate", "releaseDate", "replyDate", "receivedDate", "issueDate", "licenceStatus", "conditions", "convictions", "reportId", "reportDate","licenceProvince"]);
 const vehicleFields = new Set(["registeredOwner", "ownerAddress", "vin", "year", "make", "model", "plate", "lessor", "lienholder", "vehicleUse", "annualKm", "commuteKm"]);
-const supportId = (source: ParsedSource) => JSON.stringify([source.documentId, source.logicalDocumentId, source.sourceRevision]);
+const supportId = (source: ParsedSource) => JSON.stringify([source.documentId, source.logicalDocumentId, source.sourceRevision, source.entityId]);
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 const nonempty = (v: unknown) => v !== undefined && v !== null && v !== "";
 
 function association(data: InsuranceCase, source: ParsedSource, field: string) {
   if (source.claimRecordId && field.startsWith("claim.")) return { type: "CLAIM", lob: "AUTO", id: source.claimRecordId, primary: !data.case_type.includes("home") };
-  const type = driverFields.has(field) ? "DRIVER" : vehicleFields.has(field) ? "VEHICLE" : ["propertyInsuredSince", "continuouslyInsuredSince", "occupiedSince", "riskAddress", "numberOfMortgages", "mortgagee", "mortgageeAddress", "natureOfInterest", "lossPayee", "policyType"].includes(field) ? "PROPERTY" : "POLICY";
+  const type = source.entityId && ["DRIVER","VEHICLE","PROPERTY"].includes(source.subjectType ?? "") ? source.subjectType! : driverFields.has(field) ? "DRIVER" : vehicleFields.has(field) ? "VEHICLE" : ["propertyInsuredSince", "continuouslyInsuredSince", "occupiedSince", "riskAddress", "numberOfMortgages", "mortgagee", "mortgageeAddress", "natureOfInterest", "lossPayee", "policyType","occupancy","structure","construction","exteriorFinish","yearBuilt","families","units","livingArea","bedrooms","bathrooms","garage","roof","plumbing","electrical","heating","smokeFree","swimmingPool","dogExposure","rental","airbnb","vacant","businessUse"].includes(field) ? "PROPERTY" : "POLICY";
   const lob = source.lineOfBusiness ?? (/HAB|PROPERTY|MORTGAGE/.test(source.documentType) ? "HAB" : /AUTO|OWNERSHIP|MVR|DASH|VEHICLE|LEASE|FINANCE/.test(source.documentType) ? "AUTO" : data.case_type.includes("home") ? "HAB" : "AUTO");
   const primaryLob = data.case_type.includes("home") ? "HAB" : "AUTO";
+  if (type === "PROPERTY" && source.entityId) {
+    const actual=normalizeAddress(String(source.data.riskAddress??""));
+    const expected=normalizeAddress(data.habitational_risk?.risk_address??"");
+    const match=Boolean(actual&&expected&&actual===expected);
+    return {type,lob,id:match?data.habitational_risk?.id:undefined,primary:match&&lob===primaryLob};
+  }
   if (type === "POLICY" || type === "PROPERTY") return { type, lob, id: type === "POLICY" ? data.policy.id! : data.habitational_risk?.id, primary: lob === primaryLob };
   const entities = type === "DRIVER" ? data.drivers : data.vehicles;
   const manual = source.subjectId && source.subjectType === type ? entities.filter(e => e.id === source.subjectId) : [];
@@ -104,13 +110,24 @@ function slot(data: InsuranceCase, path: string[]): { target: Record<string, unk
   }
   return value && typeof value === "object" ? { target: value as Record<string, unknown>, key: path.at(-1)! } : undefined;
 }
-const policyPaths: Record<string, string[]> = { insurer: ["policy", "company"], quoteNumber: ["policy", "quote_number"], effectiveDate: ["policy", "effective_date"], namedInsured: ["insured", "name"], priorInsurer: ["prior_insurance", "insurer"], priorPolicyNumber: ["prior_insurance", "policy_number"], priorEffective: ["prior_insurance", "effective_date"], priorExpiry: ["prior_insurance", "expiry_date"] };
-const driverPaths: Record<string, string> = { licenceClass: "licence_class", g1Date: "g1_date", g2Date: "g2_date", gDate: "g_date", requestDate: "mvr_requested", releaseDate: "mvr_release_date", replyDate: "mvr_reply_date", receivedDate: "mvr_received", issueDate: "mvr_issue_date", expiryDate: "licence_expiry", licenceStatus: "licence_status", conditions: "licence_conditions", demeritPoints: "mvr_demerit_points", convictions: "mvr_convictions" };
+const policyPaths: Record<string, string[]> = { insurer: ["policy", "company"], quoteNumber: ["policy", "quote_number"], effectiveDate: ["policy", "effective_date"], namedInsured: ["insured", "name"], priorInsurer: ["prior_insurance", "insurer"], previousInsurer: ["prior_insurance", "insurer"], priorPolicyNumber: ["prior_insurance", "policy_number"], priorEffective: ["prior_insurance", "effective_date"], priorExpiry: ["prior_insurance", "expiry_date"], insuredSince: ["prior_insurance", "insured_since"], dateWithCompany: ["prior_insurance", "date_with_company"], continuousInsurance: ["prior_insurance", "continuous_insurance"] };
+const driverPaths: Record<string, string> = { licenceProvince: "licence_province", licenceClass: "licence_class", g1Date: "g1_date", g2Date: "g2_date", gDate: "g_date", requestDate: "mvr_requested", releaseDate: "mvr_release_date", replyDate: "mvr_reply_date", receivedDate: "mvr_received", issueDate: "mvr_issue_date", expiryDate: "licence_expiry", licenceStatus: "licence_status", conditions: "licence_conditions", demeritPoints: "mvr_demerit_points", convictions: "mvr_convictions" };
 const vehiclePaths: Record<string, string> = { vin: "vin", vehicleUse: "primary_use", annualKm: "annual_km", commuteKm: "commute_km" };
 const ownershipPaths: Record<string, string> = { registeredOwner: "registered_owner", ownerAddress: "address", vin: "vin", year: "year", make: "make", model: "model", plate: "plate", lessor: "lessor", lienholder: "lienholder" };
 const habPropertyPaths: Record<string, string[]> = {
   riskAddress: ["habitational_risk", "risk_address"], policyType: ["habitational_risk", "policy_type"], occupiedSince: ["habitational_risk", "occupied_since"],
   propertyInsuredSince: ["prior_insurance", "insured_since"], continuouslyInsuredSince: ["prior_insurance", "continuous_insurance"],
+  occupancy:["habitational_risk","occupancy"],structure:["habitational_risk","structure"],
+  construction:["habitational_risk","construction"],exteriorFinish:["habitational_risk","exterior_finish"],
+  yearBuilt:["habitational_risk","year_built"],families:["habitational_risk","families"],
+  units:["habitational_risk","units"],livingArea:["habitational_risk","living_area"],
+  bedrooms:["habitational_risk","bedrooms"],bathrooms:["habitational_risk","bathrooms"],
+  garage:["habitational_risk","garage"],roof:["habitational_risk","roof"],
+  plumbing:["habitational_risk","plumbing"],electrical:["habitational_risk","electrical"],
+  heating:["habitational_risk","heating"],smokeFree:["habitational_risk","smoke_free"],
+  swimmingPool:["habitational_risk","swimming_pool"],dogExposure:["habitational_risk","dog_animal_exposure"],
+  rental:["habitational_risk","rental"],airbnb:["habitational_risk","airbnb"],
+  vacant:["habitational_risk","vacant"],businessUse:["habitational_risk","business_use"],
   numberOfMortgages: ["mortgage", "number_of_mortgages"], mortgagee: ["mortgage", "mortgagees", "0", "name"], mortgageeAddress: ["mortgage", "mortgagees", "0", "address"], natureOfInterest: ["mortgage", "nature_of_interest"], lossPayee: ["mortgage", "loss_payees", "0", "name"],
 };
 
@@ -128,7 +145,12 @@ export function reconcileDocumentsIntoCase(current: InsuranceCase, records: Uplo
     const vehicleScope = association(next, { ...source, subjectType: "VEHICLE", subjectId: claim.vehicle_id, data: { vin: claim.vehicle_vin } }, "vin");
     claim.driver_id = driverScope.primary ? driverScope.id : undefined;
     claim.vehicle_id = vehicleScope.primary ? vehicleScope.id : undefined;
-    claim.report_subject_id = association(next, source, "licenceNumber").id;
+    // Each row carries its own report-header identity. Multiple reports in one
+    // file must never inherit the first report's subject or a manual file binding.
+    const reportLicence=Object.prototype.hasOwnProperty.call(row,"report_subject_licence")?
+      (row as Record<string,unknown>).report_subject_licence:source.data.reportSubjectLicence??source.data.licenceNumber;
+    claim.report_subject_id = association(next, { ...source, entityId:undefined,
+      subjectId:undefined,subjectType:"DRIVER",data:{licenceNumber:reportLicence} }, "licenceNumber").id;
     claim.association_status = claim.driver_id ? "ASSIGNED" : "UNASSIGNED";
     activeClaimIds.add(claim.id);
     if (!next.claims.some(c => c.id === claim.id)) next.claims.push({ id: claim.id, loss_date: "", insurer: "", policy_number: "", claim_number: "", coverage: "", loss_amount: null, at_fault_percent: null, status: "", source: claim.source });
@@ -142,7 +164,7 @@ export function reconcileDocumentsIntoCase(current: InsuranceCase, records: Uplo
     const field = canonicalFieldKey(key);
     if (!nonempty(source.data[key])) continue;
     const scope = association(next, source, field);
-    const identity = !scope.id ? `UNASSIGNED:${source.documentId}:${source.logicalDocumentId ?? "file"}:${field}` : scope.type === "POLICY" && scope.primary ? field : `${scope.lob}:${scope.type}:${scope.id}:${field}`;
+    const identity = !scope.id ? `UNASSIGNED:${source.documentId}:${source.logicalDocumentId ?? "file"}:${source.entityId ?? "scalar"}:${field}` : scope.type === "POLICY" && scope.primary ? field : `${scope.lob}:${scope.type}:${scope.id}:${field}`;
     const bucket = buckets.get(identity) ?? { field, scope, entries: [] };
     bucket.entries.push({ source, key }); buckets.set(identity, bucket);
   }
@@ -154,18 +176,20 @@ export function reconcileDocumentsIntoCase(current: InsuranceCase, records: Uplo
     const bucket = buckets.get(identity);
     const field = bucket?.field ?? old?.canonicalField ?? canonicalFieldKey(identity);
     const entries = bucket?.entries ?? [];
-    const values = entries.map(({ source, key }) => ({ source: sourceName(source.documentType), value: source.corrections?.[key]?.originalExtractedValue ?? source.data[key], correctedValue: source.corrections?.[key]?.correctedValue, documentId: source.documentId, logicalDocumentId: source.logicalDocumentId, sourceRevision: source.sourceRevision, originalKey: key, confidence: source.confidence, evidence: source.fieldEvidence[key] }));
+    const values = entries.map(({ source, key }) => ({ source: sourceName(source.documentType), value: source.corrections?.[key]?.originalExtractedValue ?? source.data[key], correctedValue: source.corrections?.[key]?.correctedValue, documentId: source.documentId, logicalDocumentId: source.logicalDocumentId, sourceRevision: source.sourceRevision, entityId: source.entityId, originalKey: key, confidence: source.confidence, evidence: source.fieldEvidence[key] }));
     const effective = entries.map(({ source, key }) => source.corrections?.[key]?.correctedValue ?? source.data[key]);
     const unique = new Set(effective.map(comparison));
     const hasCorrection = entries.some(({ source, key }) => source.corrections?.[key]);
     const manual = old?.status === "resolved" || Boolean(old?.resolved_by_user);
+    const unconfirmedOcr = !manual && !hasCorrection && entries.some(({source,key})=>
+      source.fieldEvidence?.[key]?.some(e=>e.provider === "ocr_space" || e.provider === "paddle_ocr"));
     const changed = Boolean(old && !same(old.values, values));
     const resolved = manual ? old!.resolved_value : unique.size === 1 ? effective[0] : null;
     const item: FieldSource = {
       ...old, field: identity, canonicalField: field, subjectType: bucket?.scope.type ?? old?.subjectType, subjectId: bucket?.scope.id ?? old?.subjectId, lineOfBusiness: bucket?.scope.lob ?? old?.lineOfBusiness,
       values, resolved_value: resolved, status: manual || hasCorrection && unique.size === 1 ? "resolved" : unique.size > 1 ? "conflict" : values.length ? "matched" : "missing",
       associationReview: Boolean(bucket && (!bucket.scope.id || !bucket.scope.primary)),
-      evidenceReview: Boolean(old?.evidenceReview || manual && changed || old && !old.canonicalField && (driverFields.has(field) || vehicleFields.has(field))),
+      evidenceReview: Boolean(unconfirmedOcr || old?.evidenceReview || manual && changed || old && !old.canonicalField && (driverFields.has(field) || vehicleFields.has(field))),
       withdrawnValues: changed ? [...(old?.withdrawnValues ?? []), ...old!.values.filter(v => !values.some(n => same(n, v)))] : old?.withdrawnValues,
       appliedTargets: [],
     };
@@ -215,9 +239,18 @@ export function reconcileDocumentsIntoCase(current: InsuranceCase, records: Uplo
         if (entries.some(e => e.source.documentType === "PORTAL_SCREENSHOT")) paths.push(["premium", "portal_annual"]);
       }
     }
-    if (resolved !== null && item.status !== "conflict" && !item.associationReview) for (const path of paths) {
+    if (resolved !== null && item.status !== "conflict" && !item.associationReview && !unconfirmedOcr) for (const path of paths) {
       const at = slot(next, path); if (!at || blocked.has(JSON.stringify(path))) continue;
-      const value = ["year", "annualKm", "commuteKm", "premium", "demeritPoints", "numberOfMortgages"].includes(field) ? numeric(resolved) : field === "lessor" || field === "lienholder" ? { name: String(resolved), address: "" } : resolved;
+      const numericFields=new Set(["year","annualKm","commuteKm","premium","demeritPoints",
+        "numberOfMortgages","yearBuilt","families","units","livingArea","bedrooms","bathrooms"]);
+      const boolFields=new Set(["smokeFree","swimmingPool","rental","airbnb","vacant"]);
+      const val=typeof resolved==="string"?resolved.trim().toUpperCase():resolved;
+      const boolValue=typeof resolved==="boolean"?resolved:typeof val==="string"?
+        /^(YES|TRUE|Y|1)$/.test(val)?true:/^(NO|FALSE|N|0)$/.test(val)?false:undefined:undefined;
+      const value=numericFields.has(field)?numeric(resolved):
+        boolFields.has(field)?boolValue:field==="lessor"||field==="lienholder"?
+          {name:String(resolved),address:""}:resolved;
+      if(value===undefined||value===null)continue;
       if (manual || priorTargets.some(t => same(t.path, path)) || !nonempty(at.target[at.key]) || same(at.target[at.key], value)) {
         const baseline = old?.appliedTargets?.find(t => same(t.path, path))?.previousValue ?? at.target[at.key] ?? null;
         at.target[at.key] = value;

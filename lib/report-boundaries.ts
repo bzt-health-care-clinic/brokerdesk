@@ -1,19 +1,22 @@
 import type { ExtractedPage, PackagePage } from "./extraction-types.ts";
 
-export const SECTION_ANALYSIS_VERSION = 1;
+export const SECTION_ANALYSIS_VERSION = 2;
 export const isDriverReport = (type: string) => type === "DASH" || type === "MVR";
 export const savedPageText = (page: ExtractedPage) => page.text || page.blocks?.map(block => block.text).join("\n") || "";
 export const reportHeader = (text: string) => text.split(/\n\s*(?:claims?\b|convictions?\b|historical operators?\b)/i)[0];
 export function reportIdentity(text: string) {
   // Only the report header can identify its subject, never a historical operator row.
-  const header = reportHeader(text);
+  const detailPage = /^\s*Policy #\d+\b/im.test(text) && /Number of Reported Operators/.test(text) ||
+    /^\s*Claim #\d+\b/im.test(text) && /Date of Loss/.test(text);
+  // Historical operators on a detail page must not become a new report's subject.
+  const header = detailPage ? "" : reportHeader(text);
   const pick = (pattern: RegExp) => header.match(pattern)?.[1]?.trim().toUpperCase();
   const sequence = text.match(/\bpage\s+(\d+)\s*(?:of|\/)\s*(\d+)\b/i);
   const paired = (label: string) => pick(new RegExp(`^${label}(?:[ \\t]*:[ \\t]*|[ \\t]+|[ \\t]*\\n[ \\t]*)([^\\n]+)`, "im"));
   const reportId = paired("report[ \\t]*(?:id|number|no\\.?)") ?? pick(/\breport\s*[:#]\s*([A-Z0-9-]*\d[A-Z0-9-]*)\b/i);
   return {
     reportId,
-    licence: paired("(?:report subject licence|licence number|driver licence|DLN|DL)")?.replace(/[ -]/g, ""),
+    licence: paired("(?:report subject licence|licence number|driver licence|DLN|DL)")?.replace(/\s+(?:Ontario|Expiry\s+Date.*)$/i, "").replace(/[ -]/g, ""),
     subjectName: paired("(?:report subject(?![ \\t]+licence)|driver name|subject name)"),
     reportDate: paired("report date"),
     page: sequence ? Number(sequence[1]) : undefined,

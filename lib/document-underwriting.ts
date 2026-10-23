@@ -68,8 +68,11 @@ export function reviewUploadedDocuments(item: InsuranceCase, records: UploadedDo
       // Two different phrasings describe the SAME cancellation fact: do not
       // manufacture a source conflict. One review item with both source labels.
       const origins = [...new Set(cancellation.map(entry => entry.label))].sort();
+      // A Broker and an Auditor give the SAME source file different local
+      // document IDs during BDZIP import. Bind review to immutable file bytes,
+      // page and source category, never a workstation-specific database ID.
       const fingerprint = cancellation.map(entry =>
-        `${entry.documentId}:${entry.sourceHash}:${entry.page}`).sort().join("|");
+        `${entry.sourceHash}:${entry.page}:${entry.label}`).sort().join("|");
       fingerprints.PRIOR_NONPAYMENT_CANCELLATION_REVIEW = fingerprint;
       const reviewed = (item.broker_overrides ?? []).some(override =>
         override.alert_code === "PRIOR_NONPAYMENT_CANCELLATION_REVIEW" &&

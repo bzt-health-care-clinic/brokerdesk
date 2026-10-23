@@ -17,5 +17,16 @@ export function activeParsedSources(record: UploadedDocumentRecord): ParsedSourc
     }
     if (record.logicalDocuments !== undefined && (record.logicalDocuments.length !== 1 || record.logicalDocuments[0].documentType !== source.documentType || record.logicalDocuments[0].presenceStatus !== "FOUND")) return [];
     return source.documentType === record.documentType ? [source] : [];
+  }).flatMap(source => {
+    const children = (source.entities ?? []).filter(entity => !entity.excluded && entity.kind !== "POLICY_HISTORY")
+      .map(entity => ({ ...source, entities: undefined, data: entity.data, fieldEvidence: entity.fieldEvidence,
+        warnings: entity.warnings, entityId: entity.id, entityLabel: entity.label,
+        subjectType: entity.kind, subjectId: undefined, excluded: false }));
+    // Driver reports retain scalar compatibility in stored parsed JSON. Only the
+    // entity-scoped copy contributes those fields to canonical reconciliation.
+    const groupedKeys = new Set(source.entities?.filter(e=>e.kind==="DRIVER").flatMap(e=>Object.keys(e.data)) ?? []);
+    const main = ["MVR","DASH"].includes(source.documentType) && children.length
+      ? {...source,data:Object.fromEntries(Object.entries(source.data).filter(([key])=>!groupedKeys.has(key)))} : source;
+    return [main, ...children];
   });
 }

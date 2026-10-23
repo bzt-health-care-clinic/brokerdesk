@@ -2,10 +2,21 @@ import { enrichDriverReport, reportRaw } from "./report-details.ts";
 import { isDriverReport, reportHeader } from "./report-boundaries.ts";
 import type { ClassificationResult, DocumentExtractor, DocumentParser, DocumentType, ExtractionInput, ExtractionProvider, ExtractionWarning, ParsedSource, RawExtractedDocument, UploadedDocumentRecord } from "./extraction-types.ts";
 import { ownershipFields } from "./ownership-fields.ts";
+import { parseAppliedRating } from "./applied-rating-parser.ts";
+import { parseSignedApplication } from "./signed-application-layout.ts";
+import { parseMvrLayout, parseDashLayout } from "./driver-report-layout.ts";
 const CRITICAL_FIELD_CONFIDENCE = .9;
 export const EXTRACTION_PIPELINE_VERSION = 2;
-export const PARSER_VERSION = 4;
-export function requiredParserVersion(record: UploadedDocumentRecord) { return [record.documentType, ...(record.logicalDocuments ?? []).map(s => s.documentType), ...(record.packagePages ?? []).map(p => p.classification.documentType)].some(isDriverReport) ? PARSER_VERSION : 3; }
+export const PARSER_VERSION = 8;
+// Reparse only sources whose structured fields changed; binary proof photos and
+// signature-only files do not need OCR to remain valid supporting evidence.
+export function requiredParserVersion(record: UploadedDocumentRecord) {
+  const kinds=[record.documentType,...(record.logicalDocuments??[]).map(s=>s.documentType),
+    ...(record.packagePages??[]).map(page=>page.classification.documentType)];
+  const expanded=new Set<DocumentType>([
+    "AUTO_APPLICATION","AUTO_QUOTE","HAB_APPLICATION","HAB_QUOTE","POLICY_CHANGE"]);
+  return kinds.some(type=>isDriverReport(type)||expanded.has(type))?PARSER_VERSION:3;
+}
 
 export function invalidateStaleExtraction(record: UploadedDocumentRecord): UploadedDocumentRecord {
   if (!record.raw && !record.parsed && !record.packagePages?.length && !record.parsedSources?.length) return record;
@@ -54,6 +65,13 @@ export function classifyDocument(fileName: string, mimeType: string, text = ""):
   const from = (documentType: DocumentType, reason: string, confidence = .95): ClassificationResult =>
     ({ documentType, confidence, reason });
 
+  // Stand-alone report headers inside a combined PDF outrank the physical filename.
+  if (/^\s*(?:MVR Abstracts|ONTARIO\s+Driving\s+Record)\b/im.test(head))
+    return from("MVR", "Standalone driving-record page title.");
+  if (/^\s*(?:DASH\s+)?DRIVER REPORT\b/im.test(head) ||
+    /^\s*Claim #\d+\b/im.test(head) && /Date of Loss/.test(head) ||
+    /^\s*Policy #\d+\b/im.test(head) && /Number of Reported Operators/.test(head))
+    return from("DASH", "Standalone driver-report or policy/claim detail page.");
   const isSignaturePacket = /^g4sign[\s._-]/i.test(fileName);
   if (isSignaturePacket) {
     if (/\bHABITATIONAL\s+INSURANCE\b|\bAPPLICATION\s+FOR\s+HABITATIONAL\s+INSURANCE\b/i.test(head))
@@ -69,6 +87,21 @@ export function classifyDocument(fileName: string, mimeType: string, text = ""):
   if (/\bowern\s*ship\b/i.test(name))
     return from("OWNERSHIP", "Filename identifies a rotated/scanned Ontario ownership permit.");
 
+  // Formal signed application titles must outrank incidental Quote labels.
+  // These are page-title signals, not proof that every checkbox is parsed.
+  if (/^\s*(?:Ontario Application for Automobile Insurance|APPLICATION FOR AUTOMOBILE INSURANCE|Owner.s Form\s*\(OAF\s*1\))/im.test(text))
+    return from("AUTO_APPLICATION", "Signed Auto application form title; selections still require geometric review.");
+  if (/^\s*(?:HABITATIONAL INSURANCE APPLICATION|APPLICATION FOR HABITATIONAL INSURANCE)/im.test(text))
+    return from("HAB_APPLICATION", "Signed habitational application form title; selections still require geometric review.");
+
+  // Applied entity headings are stronger than incidental Winter Tires/Driver Training labels.
+  if (/^\s*(?:Vehicle|Driver)\s+\d+\s+of\s+\d+\b/im.test(text) ||
+      /Applicant Information/i.test(text) && /First Name/i.test(text) && /Last Name/i.test(text) ||
+      /Applied Rating Services/i.test(text) && /Operator/i.test(text) && /Bodily Injury|Uninsured Automobile/i.test(text))
+    return from("AUTO_QUOTE", "Applied Auto table or carrier-detail layout.");
+  if (/^\s*Primary Dwelling\b/im.test(text) && /Dwelling Information/i.test(text))
+    return from("HAB_QUOTE", "Applied Home dwelling table layout.");
+
   // Explicit filenames outrank long unrelated body text or generic labels.
   for (const candidate of CLASSIFIERS)
     if (candidate.patterns.some(pattern => pattern.test(name)))
@@ -76,6 +109,7 @@ export function classifyDocument(fileName: string, mimeType: string, text = ""):
 
   // These categories need a stand-alone TITLE, not just a word in a quote.
   const specialized: Partial<Record<DocumentType, RegExp>> = {
+    WINTER_TIRE_PROOF: /^(?:winter[ \t]+tires?[ \t]+(?:declaration|proof|certificate)|confirmation[ \t]+of[ \t]+winter[ \t]+tires?)\b/im,
     DRIVER_TRAINING_CERTIFICATE: /^(?:driver\s+training\s+(?:graduation\s+)?certificate|driving\s+school\s+graduation|certificate\s+of\s+driver\s+training)\b/im,
     LEASE_DOCUMENT: /^(?:vehicle\s+)?(?:lease\s+agreement|leasing\s+contract)\b/im,
     FINANCE_DOCUMENT: /^(?:vehicle\s+)?(?:finance\s+agreement|financing\s+agreement|lienholder\s+agreement)\b/im,
@@ -116,9 +150,11 @@ export class LocalTextProvider implements ExtractionProvider {
   }
 }
 
-const valueFrom = (text: string, labels: string[]) => {
-  for (const label of labels) {
-    const match = text.match(new RegExp(`(?:^|\\n)[ \\t]*${label}(?:[ \\t]*[:#-][ \\t]*|[ \\t]+|[ \\t]*\\n[ \\t]*)([^\\n\\r]+)`, "im"));
+const valueFrom = (text: string, labels: string[], strictInline = false) => {
+  // Longest label first: 'Structure Type' must not be parsed as 'Structure' with value 'Type: ...'.
+  for (const label of [...labels].sort((left,right)=>right.length-left.length)) {
+    const separator = strictInline ? "[ \\t]*[:#][ \\t]*" : "(?:[ \\t]*[:#-][ \\t]*|[ \\t]+|[ \\t]*\\n[ \\t]*)";
+    const match = text.match(new RegExp(`(?:^|\\n)[ \\t]*${label}${separator}([^\\n\\r]+)`, "im"));
     if (match) return match[1].trim();
   }
   return undefined;
@@ -169,13 +205,30 @@ abstract class KeyValueParser implements DocumentParser<Record<string, unknown>>
   abstract documentType: DocumentType;
   abstract fields: Record<string, string[]>;
   async parse(raw: RawExtractedDocument, context?: { fileName?: string }): Promise<ParsedSource<Record<string, unknown>>> {
+    const signed = ["AUTO_APPLICATION","HAB_APPLICATION"].includes(this.documentType) ? parseSignedApplication(raw,this.documentType) : undefined;
+    if (signed) return signed;
+    const layout = ["AUTO_APPLICATION","AUTO_QUOTE","HAB_APPLICATION","HAB_QUOTE"].includes(this.documentType)
+      ? parseAppliedRating(raw,this.documentType) : undefined;
+    if (layout) return layout;
     const text = raw.text ?? raw.pages?.map((page) => page.text ?? "").join("\n") ?? "";
+    // Unknown application grids do not share the simple label-followed-by-value grammar.
+    // Without a supported template, retain only explicit inline labelled values.
+    const strictApplication = /_APPLICATION$/.test(this.documentType) && Boolean(raw.pages?.some(page => page.blocks?.length));
     const data: Record<string, unknown> = {};
     const fieldEvidence: ParsedSource["fieldEvidence"] = {};
+    const rejected: ExtractionWarning[] = [];
     for (const [field, labels] of Object.entries(this.fields)) {
-      const value = valueFrom(text, labels);
+      const value = valueFrom(text, labels, strictApplication);
       if (value !== undefined) {
-        data[field] = value;
+        const invalid = strictApplication && (
+          /Date$|^dob$|^priorEffective$|^priorExpiry$|Since$/.test(field) && !/^(?:\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{4})$/.test(value) ||
+          field === "vin" && !/^[A-HJ-NPR-Z0-9]{17}$/i.test(value) ||
+          field === "licenceNumber" && !/^[A-Z]\d[\d -]{8,20}$/i.test(value) ||
+          ["namedInsured","coInsured","driverName"].includes(field) && /signature|summary|information|licence|training|\d/i.test(value) ||
+          /premium|liability|price|deductible/i.test(field) && !/^\$?[\d,.]+$/.test(value)
+        );
+        if (!invalid) data[field] = value;
+        else rejected.push({code:"NEEDS_REVIEW",field,severity:"medium",message:`Application ${field} does not contain a valid value; no answer selected.`});
         const page = raw.pages?.find((item) => (item.text ?? "").includes(value));
         const block = page?.blocks?.find((item) => item.text.includes(value));
         fieldEvidence[field] = [{ page: page?.pageNumber ?? page?.page ?? 1, text: value, boundingBox: block?.boundingBox, confidence: block?.confidence ?? page?.confidence ?? raw.confidence ?? .8 }];
@@ -183,18 +236,21 @@ abstract class KeyValueParser implements DocumentParser<Record<string, unknown>>
     }
     const noText = !text.trim();
     const warnings: ExtractionWarning[] = noText ? [{ code: "EXTRACTION_PROVIDER_REQUIRED", message: "This PDF/image requires a configured text/OCR provider or manual entry.", severity: "medium" }] : [];
+    warnings.push(...rejected);
+    if (strictApplication && Object.keys(data).length === 0) warnings.push({code:"NEEDS_REVIEW", severity:"medium",
+      message:"Unsupported signed application grid: no safe labelled values selected. Review the original application; Quote data does not verify its selections."});
     const criticalFields = new Set(["vin", "licenceNumber", "policyNumber", "quoteNumber", "namedInsured", "registeredOwner", "memberNumber", "certificateNumber"]);
     for (const field of Object.keys(data)) {
       const confidence = fieldEvidence[field]?.[0]?.confidence ?? raw.confidence ?? 0;
       if (criticalFields.has(field) && confidence < CRITICAL_FIELD_CONFIDENCE) warnings.push({ code: field === "vin" ? "VIN_REVIEW_REQUIRED" : "CRITICAL_FIELD_REVIEW_REQUIRED", message: `${field} extraction confidence is below 90%; broker review is required.`, field, severity: "high" });
     }
     if (raw.metadata?.rotationReviewRequired) warnings.push({ code: "ROTATION_REVIEW_REQUIRED", message: "Document orientation could not be confirmed; review OCR output.", severity: "medium" });
-    return { documentId: String(raw.metadata?.fileId ?? context?.fileName ?? crypto.randomUUID()), documentType: this.documentType, parsedAt: new Date().toISOString(), confidence: noText ? .2 : raw.confidence ?? .8, data, warnings, fieldEvidence };
+    return { documentId: String(raw.metadata?.fileId ?? context?.fileName ?? crypto.randomUUID()), documentType: this.documentType, parsedAt: new Date().toISOString(), confidence: noText ? .2 : raw.confidence ?? .8, data, warnings, fieldEvidence, ...(strictApplication?{layoutVersion:1}:{}) };
   }
 }
 
-export class AutoApplicationParser extends KeyValueParser { documentType = "AUTO_APPLICATION" as const; fields = { insurer: ["Insurance Company", "Insurer", "Carrier"], quoteNumber: ["Quote", "Submission"], namedInsured: ["Named Insured", "Applicant", "Insured"], coInsured: ["Co-Insured", "Co Insured"], effectiveDate: ["Effective Date", "Effective"], vin: ["VIN"], vehicleUse: ["Primary Use", "Use"], annualKm: ["Annual KM", "Annual Kilometres"], commuteKm: ["Commute KM", "One-way commute"], g1Date: ["G1 Date", "G1"], g2Date: ["G2 Date", "G2"], gDate: ["G Date", "G"], telematicsPhone: ["Telematics Phone", "Registered Phone"], telematicsEmail: ["Telematics Email", "Registered Email"], premium: ["Annual Premium", "Premium"] }; }
-export class AutoQuoteParser extends KeyValueParser { documentType = "AUTO_QUOTE" as const; fields = { insurer: ["Insurance Company", "Carrier", "Insurer"], quoteNumber: ["Quote Number", "Quote", "Submission"], namedInsured: ["Named Insured", "Insured"], effectiveDate: ["Effective Date", "Effective"], vin: ["VIN"], annualKm: ["Annual KM"], commuteKm: ["Commute KM"], premium: ["Annual Premium", "Premium"], telematicsDiscount: ["Telematics Discount"] }; }
+export class AutoApplicationParser extends KeyValueParser { documentType = "AUTO_APPLICATION" as const; fields = { insurer: ["Insurance Company", "Insurer", "Carrier"], quoteNumber: ["Quote", "Submission"], namedInsured: ["Named Insured", "Applicant", "Insured"], coInsured: ["Co-Insured", "Co Insured"], effectiveDate: ["Effective Date", "Effective"], vin: ["VIN"], vehicleUse: ["Primary Use", "Use"], annualKm: ["Annual KM", "Annual Kilometres"], commuteKm: ["Commute KM", "One-way commute"], g1Date: ["G1 Date", "G1"], g2Date: ["G2 Date", "G2"], gDate: ["G Date", "G"], telematicsPhone: ["Telematics Phone", "Registered Phone"], telematicsEmail: ["Telematics Email", "Registered Email"], premium: ["Annual Premium", "Premium"], driverName: ["Driver Name", "Driver", "Operator Name"], dob: ["Date of Birth", "DOB"], licenceNumber: ["Licence Number", "Driver Licence Number"], licenceClass: ["Licence Class", "DL Class"], liability: ["Third Party Liability", "Liability Limit", "Liability"], dcpdDeductible: ["DCPD Deductible"], allPerilsDeductible: ["All Perils Deductible"], deductibles: ["Deductibles"], endorsements: ["Endorsements", "OPCF Selections"], purchaseDate: ["Purchase Date"], purchasePrice: ["Purchase Price"], garagingAddress: ["Garaging Address", "Garage Address"], businessUsePercent: ["Business Use Percent", "Business Use %"], winterTires: ["Winter Tires"], leased: ["Leased"], previousInsurer: ["Previous Insurer"], priorPolicyNumber: ["Previous Policy Number", "Prior Policy Number"], insuredSince: ["Auto Insured Since", "Insured Since"], dateWithCompany: ["Date With Company"], continuousInsurance: ["Continuous Insurance"] }; }
+export class AutoQuoteParser extends KeyValueParser { documentType = "AUTO_QUOTE" as const; fields = { insurer: ["Insurance Company", "Carrier", "Insurer"], quoteNumber: ["Quote Number", "Quote", "Submission"], namedInsured: ["Named Insured", "Insured"], coInsured: ["Co-Insured", "Co Insured", "Second Named Insured"], effectiveDate: ["Effective Date", "Effective"], vin: ["VIN"], annualKm: ["Annual KM"], commuteKm: ["Commute KM"], premium: ["Annual Premium", "Premium"], telematicsDiscount: ["Telematics Discount"], driverName: ["Driver Name", "Driver", "Operator Name"], dob: ["Date of Birth", "DOB"], licenceNumber: ["Licence Number", "Driver Licence Number"], licenceClass: ["Licence Class", "DL Class"], liability: ["Third Party Liability", "Liability Limit", "Liability"], dcpdDeductible: ["DCPD Deductible"], allPerilsDeductible: ["All Perils Deductible"], deductibles: ["Deductibles"], endorsements: ["Endorsements", "OPCF Selections"], purchaseDate: ["Purchase Date"], purchasePrice: ["Purchase Price"], garagingAddress: ["Garaging Address", "Garage Address"], businessUsePercent: ["Business Use Percent", "Business Use %"], winterTires: ["Winter Tires"], leased: ["Leased"], previousInsurer: ["Previous Insurer"], priorPolicyNumber: ["Previous Policy Number", "Prior Policy Number"], insuredSince: ["Auto Insured Since", "Insured Since"], dateWithCompany: ["Date With Company"], continuousInsurance: ["Continuous Insurance"] }; }
 export class OwnershipParser extends KeyValueParser {
   documentType = "OWNERSHIP" as const;
   fields = {};
@@ -225,11 +281,11 @@ export class OwnershipParser extends KeyValueParser {
 }
 export class BillOfSaleParser extends KeyValueParser { documentType = "BILL_OF_SALE" as const; fields = { purchaser: ["Purchaser", "Buyer"], seller: ["Seller"], vin: ["VIN"], year: ["Year"], make: ["Make"], model: ["Model"], purchaseDate: ["Purchase Date", "Date of Sale"], purchasePrice: ["Purchase Price", "Sale Price"] }; }
 export class DriverTrainingCertificateParser extends KeyValueParser { documentType = "DRIVER_TRAINING_CERTIFICATE" as const; fields = { driverName: ["Driver Name", "Student Name", "Graduate"], drivingSchool: ["Driving School", "Institution"], graduationDate: ["Graduation Date", "Certificate Date"], certificateNumber: ["Certificate Number", "Certificate No"], course: ["Course", "Program"] }; }
-export class MVRParser extends KeyValueParser { documentType = "MVR" as const; fields = { driverName: ["Driver Name", "Name"], dob: ["DOB", "Date of Birth"], licenceNumber: ["DL", "Licence Number", "Driver Licence"], licenceClass: ["Licence Class", "Class"], licenceStatus: ["Licence Status", "Status"], issueDate: ["Issue Date"], expiryDate: ["Licence Expiry", "Expiry Date", "Expiry"], demeritPoints: ["Demerit Points"], requestDate: ["Requested Date", "Request Date"], releaseDate: ["Release Date"], replyDate: ["Reply Date"], receivedDate: ["Received Date"], conditions: ["Licence Conditions", "Conditions"] }; async parse(raw: RawExtractedDocument, context?: { fileName?: string }) { raw = reportRaw(raw); return enrichDriverReport(await super.parse({ ...raw, text: reportHeader(raw.text ?? "") }, context), raw); } }
-export class DashParser extends KeyValueParser { documentType = "DASH" as const; fields = { priorInsurer: ["Prior Insurer", "Insurer"], priorPolicyNumber: ["Policy Number", "Policy"], priorEffective: ["Policy Effective", "Effective"], priorExpiry: ["Policy Expiry", "Expiry"], policyStatus: ["Policy Status", "Status"], insuredSince: ["Insured Since"], claimsJson: ["Claims JSON"] }; async parse(raw: RawExtractedDocument, context?: { fileName?: string }) { raw = reportRaw(raw); return enrichDriverReport(await super.parse({ ...raw, text: reportHeader(raw.text ?? "") }, context), raw); } }
-export class HabApplicationParser extends KeyValueParser { documentType = "HAB_APPLICATION" as const; fields = { insurer: ["Insurance Company", "Carrier"], namedInsured: ["Named Insured", "Insured"], coInsured: ["Co-Insured"], effectiveDate: ["Effective Date"], priorInsurer: ["Previous Property Insurer", "Prior Insurer"], priorPolicyNumber: ["Previous Property Policy Number", "Prior Policy Number"], priorEffective: ["Prior Effective Date"], priorExpiry: ["Prior Expiry Date"], propertyInsuredSince: ["Property Insured Since"], continuouslyInsuredSince: ["Continuously Insured Since"], occupiedSince: ["Occupied Since"], riskAddress: ["Risk Address", "Property Address"], policyType: ["Policy Type"], numberOfMortgages: ["Number of Mortgages"], mortgageeAddress: ["Mortgagee Address"], mortgagee: ["Mortgagee"], natureOfInterest: ["Nature of Interest"], lossPayee: ["Loss Payee"], premium: ["Annual Premium", "Premium"] }; }
-export class HabQuoteParser extends KeyValueParser { documentType = "HAB_QUOTE" as const; fields = { insurer: ["Insurance Company", "Carrier"], quoteNumber: ["Quote", "Submission"], namedInsured: ["Insured"], effectiveDate: ["Effective Date"], propertyInsuredSince: ["Property Insured Since"], continuouslyInsuredSince: ["Continuously Insured Since"], occupiedSince: ["Occupied Since"], riskAddress: ["Risk Address"], policyType: ["Policy Type"], mortgagee: ["Mortgagee"], lossPayee: ["Loss Payee"], premium: ["Annual Premium", "Premium"] }; }
-export class PolicyChangeParser extends KeyValueParser { documentType = "POLICY_CHANGE" as const; fields = { namedInsured: ["Insured"], clientCode: ["Client Code"], policyNumber: ["Policy Number", "Policy"], insurer: ["Carrier", "Insurance Company"], requestedEffectiveDate: ["Requested Effective Date", "Effective Date"], vehicleOrProperty: ["Vehicle", "Property"], vin: ["VIN"], requestedAction: ["Requested Action", "Action"], freeTextInstruction: ["Instruction", "Request"] }; }
+export class MVRParser extends KeyValueParser { documentType = "MVR" as const; fields = { driverName: ["Driver Name", "Name"], dob: ["DOB", "Date of Birth"], licenceNumber: ["DL", "Licence Number", "Driver Licence"], licenceClass: ["Licence Class", "Class"], licenceStatus: ["Licence Status", "Status"], issueDate: ["Issue Date"], expiryDate: ["Licence Expiry", "Expiry Date", "Expiry"], demeritPoints: ["Demerit Points"], requestDate: ["Requested Date", "Request Date"], releaseDate: ["Release Date"], replyDate: ["Reply Date"], receivedDate: ["Received Date"], conditions: ["Licence Conditions", "Conditions"] }; async parse(raw: RawExtractedDocument, context?: { fileName?: string }) { raw = reportRaw(raw); const layout = parseMvrLayout(raw); if (layout) return layout; return enrichDriverReport(await super.parse({ ...raw, text: reportHeader(raw.text ?? "") }, context), raw); } }
+export class DashParser extends KeyValueParser { documentType = "DASH" as const; fields = { priorInsurer: ["Prior Insurer", "Insurer"], priorPolicyNumber: ["Policy Number", "Policy"], priorEffective: ["Policy Effective", "Effective"], priorExpiry: ["Policy Expiry", "Expiry"], policyStatus: ["Policy Status", "Status"], insuredSince: ["Insured Since"], claimsJson: ["Claims JSON"] }; async parse(raw: RawExtractedDocument, context?: { fileName?: string }) { raw = reportRaw(raw); const layout = parseDashLayout(raw); if (layout) return layout; return enrichDriverReport(await super.parse({ ...raw, text: reportHeader(raw.text ?? "") }, context), raw); } }
+export class HabApplicationParser extends KeyValueParser { documentType = "HAB_APPLICATION" as const; fields = { insurer: ["Insurance Company", "Carrier"], namedInsured: ["Named Insured", "Insured"], coInsured: ["Co-Insured"], effectiveDate: ["Effective Date"], priorInsurer: ["Previous Property Insurer", "Prior Insurer"], priorPolicyNumber: ["Previous Property Policy Number", "Prior Policy Number"], priorEffective: ["Prior Effective Date"], priorExpiry: ["Prior Expiry Date"], propertyInsuredSince: ["Property Insured Since"], continuouslyInsuredSince: ["Continuously Insured Since"], occupiedSince: ["Occupied Since"], riskAddress: ["Risk Address", "Property Address"], policyType: ["Policy Type"], numberOfMortgages: ["Number of Mortgages"], mortgageeAddress: ["Mortgagee Address"], mortgagee: ["Mortgagee"], natureOfInterest: ["Nature of Interest"], lossPayee: ["Loss Payee"], premium: ["Annual Premium", "Premium"], occupancy: ["Occupancy", "Occupancy Type"], structure: ["Structure", "Structure Type"], construction: ["Construction", "Construction Type"], exteriorFinish: ["Exterior Finish", "Exterior"], yearBuilt: ["Year Built"], families: ["Number of Families", "Families"], units: ["Number of Units", "Units"], livingArea: ["Living Area", "Square Feet"], bedrooms: ["Bedrooms"], bathrooms: ["Bathrooms"], garage: ["Garage Type", "Garage"], roof: ["Roof Type", "Roof"], plumbing: ["Plumbing"], electrical: ["Electrical"], heating: ["Heating"], smokeFree: ["Smoke Free", "Smoke-Free"], swimmingPool: ["Swimming Pool", "Pool"], dogExposure: ["Dog / Animal Exposure", "Dog Exposure"], rental: ["Rental Property", "Rental"], airbnb: ["Airbnb"], vacant: ["Vacant"], businessUse: ["Business Use"], annualPremium: ["Annual Premium"] }; }
+export class HabQuoteParser extends KeyValueParser { documentType = "HAB_QUOTE" as const; fields = { insurer: ["Insurance Company", "Carrier"], quoteNumber: ["Quote", "Submission"], namedInsured: ["Named Insured", "Insured"], coInsured: ["Co-Insured", "Co Insured", "Second Named Insured"], effectiveDate: ["Effective Date"], propertyInsuredSince: ["Property Insured Since"], continuouslyInsuredSince: ["Continuously Insured Since"], occupiedSince: ["Occupied Since"], riskAddress: ["Risk Address"], policyType: ["Policy Type"], mortgagee: ["Mortgagee"], lossPayee: ["Loss Payee"], premium: ["Annual Premium", "Premium"], occupancy: ["Occupancy", "Occupancy Type"], structure: ["Structure", "Structure Type"], construction: ["Construction", "Construction Type"], exteriorFinish: ["Exterior Finish", "Exterior"], yearBuilt: ["Year Built"], families: ["Number of Families", "Families"], units: ["Number of Units", "Units"], livingArea: ["Living Area", "Square Feet"], bedrooms: ["Bedrooms"], bathrooms: ["Bathrooms"], garage: ["Garage Type", "Garage"], roof: ["Roof Type", "Roof"], plumbing: ["Plumbing"], electrical: ["Electrical"], heating: ["Heating"], smokeFree: ["Smoke Free", "Smoke-Free"], swimmingPool: ["Swimming Pool", "Pool"], dogExposure: ["Dog / Animal Exposure", "Dog Exposure"], rental: ["Rental Property", "Rental"], airbnb: ["Airbnb"], vacant: ["Vacant"], businessUse: ["Business Use"], annualPremium: ["Annual Premium"], mortgageeAddress: ["Mortgagee Address"] }; }
+export class PolicyChangeParser extends KeyValueParser { documentType = "POLICY_CHANGE" as const; fields = { namedInsured: ["Insured"], clientCode: ["Client Code"], policyNumber: ["Policy Number", "Policy"], insurer: ["Carrier", "Insurance Company"], requestedEffectiveDate: ["Requested Effective Date", "Effective Date"], vehicleOrProperty: ["Vehicle", "Property"], vin: ["VIN"], requestedAction: ["Requested Action", "Action"], freeTextInstruction: ["Instruction", "Request"], previousValue: ["Previous Value", "Old Value"], requestedValue: ["Requested Value", "New Value"], oldVin: ["Old VIN", "Previous VIN"], newVin: ["New VIN", "Replacement VIN"], oldVehicle: ["Old Vehicle", "Removed Vehicle"], newVehicle: ["New Vehicle", "Added Vehicle"], oldDriver: ["Previous Driver", "Old Driver"], newDriver: ["New Driver"], oldAddress: ["Previous Address", "Old Address"], newAddress: ["New Address"], previousAnnualKm: ["Previous Annual KM"], requestedAnnualKm: ["Requested Annual KM"], previousCommuteKm: ["Previous Commute KM"], requestedCommuteKm: ["Requested Commute KM"], coverageChanges: ["Coverage Change", "Coverage Changes"], endorsements: ["Endorsement Changes", "OPCF"] }; }
 export class OpcfFormParser extends KeyValueParser { documentType = "OPCF_FORM" as const; fields = { namedInsured: ["Insured"], policyNumber: ["Policy Number", "Policy"], endorsement: ["Endorsement", "OPCF"], action: ["Action"], vehicle: ["Vehicle"], vin: ["VIN"], requestedEffectiveDate: ["Requested Effective Date", "Effective Date"], requestedBy: ["Requested By"], reason: ["Reason", "Notes"] }; }
 export class PortalScreenshotParser extends KeyValueParser { documentType = "PORTAL_SCREENSHOT" as const; fields = { namedInsured: ["Insured"], address: ["Address"], effectiveDate: ["Effective Date"], vin: ["VIN"], annualKm: ["Annual KM"], premium: ["Premium"] }; }
 export class MortgageParser extends KeyValueParser { documentType = "MORTGAGE_DOCUMENT" as const; fields = { numberOfMortgages: ["Number of Mortgages"], mortgageeAddress: ["Mortgagee Address", "Address"], mortgagee: ["Mortgagee", "Bank", "Lender"], natureOfInterest: ["Nature of Interest"], lossPayee: ["Loss Payee"] }; }

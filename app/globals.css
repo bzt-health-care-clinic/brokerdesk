@@ -157,3 +157,101 @@ button,a,input,textarea,[role="button"],[tabindex] { -webkit-tap-highlight-color
   .case-title-actions { width:100%; max-width:none; justify-content:flex-start; }
   .case-title-actions [data-slot="button"] { flex:1 1 auto; }
 }
+
+/* Pilot workflow. Explicit visual separation from the standard local review UI. */
+.pilot-inbox { max-width: 1180px; margin: 0 auto; padding: 32px 26px; color: var(--foreground); }
+.pilot-inbox-head { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 24px; }
+.pilot-inbox-head h1 { font-size: 1.65rem; font-weight: 680; }
+.pilot-inbox-head p, .pilot-import p, .pilot-tasks p, .pilot-task small { opacity: .72; }
+.pilot-import, .pilot-task, .pilot-submission-panel { border: 1px solid var(--border, #9da6ae); border-radius: 12px; padding: 16px; margin-bottom: 16px; background: var(--card, transparent); }
+.pilot-import h2, .pilot-tasks h2 { font-size: 1.1rem; font-weight: 650; margin-bottom: 8px; }
+.pilot-import label, .pilot-identity-control label, .pilot-auth-control label { display: grid; gap: 4px; font-weight: 550; }
+.pilot-import input, .pilot-identity-control input, .pilot-auth-control select { min-height: 35px; padding: 6px 8px; width: 100%; border: 1px solid #9da6ae; border-radius: 7px; background: var(--background, white); color: var(--foreground, black); }
+.pilot-inbox-result, .pilot-result { font-size: .85rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pilot-channels { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 16px; }
+.pilot-channels button, .pilot-task-actions button, .pilot-preflight-issue button { border: 1px solid #9da6ae; border-radius: 7px; padding: 7px 11px; font-weight: 550; }
+.pilot-channels button[aria-current="page"] { outline: 2px solid var(--primary, #586980); }
+.pilot-task { display:flex; align-items:start; justify-content:space-between; gap:16px; }
+.pilot-task strong { overflow-wrap: anywhere; }
+.pilot-task-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.pilot-inbox-link { align-self:center; font-weight:650; margin-right:10px; }
+.pilot-section-header { display:flex; flex-direction:column; gap:3px; margin-bottom:12px; }
+.pilot-submission-panel small { display:block; font-size:.76rem; opacity:.8; line-height:1.4; margin-block:5px; }
+.pilot-auth-control, .pilot-preflight-control, .pilot-identity-control { display:grid; gap:9px; padding-bottom:12px; margin-bottom:12px; border-bottom:1px solid #acb5bb; }
+.pilot-preflight-issue { border-left:3px solid #c77426; padding:7px; font-size:.82rem; line-height:1.4; }
+.pilot-preflight-issue button { display:block; margin-top:3px; font-size:.75rem; text-decoration:underline; }
+.pilot-submission-panel button:disabled, .pilot-task button:disabled { opacity:.4; cursor:not-allowed; }
+@media (max-width:800px) { .pilot-inbox-head,.pilot-task { flex-direction:column; }.pilot-inbox { padding:20px 12px; } }
+
+/* Non-blocking Broker and Auditor intake WARN indicators */
+.pilot-warning-list,.pilot-preflight-warning {background:#fff4d2;color:#473500;border:1px solid #d4a83a;border-radius:8px;padding:10px 12px;margin-block:8px;}
+.pilot-warning-list strong,.pilot-warning-head {color:#785000;font-weight:700;}
+.pilot-warning-list p {color:#473500;opacity:1;font-size:.85rem;margin:5px 0;}
+.pilot-intake-support {display:grid;gap:8px;}
+.pilot-proof-row {padding:10px;border:1px solid var(--border,#a4afb8);border-radius:8px;display:grid;gap:8px;}
+.pilot-proof-fields {display:grid;gap:8px;}
+.pilot-intake-support input:not([type=checkbox]),.pilot-intake-support select,.pilot-auth-control textarea,.pilot-auth-control input:not([type=checkbox]) {min-height:35px;width:100%;padding:6px 8px;border:1px solid #9da6ae;border-radius:7px;background:var(--background,white);color:var(--foreground,#172631);}
+.pilot-intake-support label.pilot-check-label {display:flex;align-items:center;gap:8px;font-weight:450;}
+.pilot-proof-fields a {text-decoration:underline;font-size:.85rem;}
+
+/* Manual, document-scoped OCR name suggestions. Never auto-approve identity. */
+.pilot-name-suggestions { display:grid;gap:5px;padding:9px 11px;border:1px solid var(--border,#9da6ae);border-radius:8px; }
+.pilot-name-suggestion { display:flex;align-items:center;justify-content:space-between;gap:9px;flex-wrap:wrap; }
+.pilot-name-suggestion span {overflow-wrap:anywhere;font-size:.85rem;}
+.pilot-name-suggestion button {flex-shrink:0;}
+
+/* Explicit role separation: Broker file verification, Auditor source-linked key-in. */
+.broker-intake,.auditor-worksheet {display:grid;gap:18px;min-width:0;padding:2px;}
+.broker-intake-head,.auditor-worksheet-head {display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:flex-start;border-bottom:1px solid #9da6ae;padding-bottom:12px;}
+.broker-intake-head h2,.auditor-worksheet-head h2 {font-weight:720;font-size:1.3rem;line-height:1.3;}
+.broker-intake-head p,.auditor-worksheet-head p {max-width:72ch;line-height:1.5;font-size:.9rem;}
+.broker-intake-section,.auditor-worksheet-section {border:1px solid var(--border,#afb7bf);border-radius:10px;padding:12px;min-width:0;}
+.broker-intake-section h3,.auditor-worksheet-section h3 {font-size:1.03rem;font-weight:700;margin:0 0 10px;}
+.broker-intake-fields {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,225px),1fr));gap:11px;}
+.broker-intake-fields label {display:grid;gap:4px;font-size:.86rem;min-width:0;}
+.broker-intake-fields input,.broker-intake-fields select,.broker-intake-fields textarea,
+.auditor-worksheet-tools input {border:1px solid #98a4b2;border-radius:7px;padding:7px 9px;min-height:36px;width:100%;background:var(--background,#fff);color:var(--foreground,#1f2937);}
+.broker-intake-fields textarea {resize:vertical;}
+.broker-intake-vehicle {display:grid;gap:8px;background:var(--surface,#f5f6f7);border-radius:8px;padding:12px;margin:10px 0;}
+.broker-intake-vehicle button,.broker-intake-section button {justify-self:start;}
+.broker-intake-hint,.broker-intake-footer {font-size:.82rem;line-height:1.5;color:var(--muted-foreground,#59636e);}
+.broker-intake-footer {border-top:1px solid var(--border,#abb4bd);padding-top:12px;}
+.broker-ownership-suggestion {display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:9px;border:1px solid var(--border,#b8c0c8);border-radius:8px;margin:7px 0;font-size:.85rem;}
+.broker-document-status {display:grid;gap:6px;}
+.broker-document-status>div {display:flex;align-items:center;gap:12px;padding:7px 9px;border:1px solid var(--border,#abb2bb);border-radius:7px;}
+.broker-document-status .received strong {color:#266d46;}
+.broker-document-status .missing strong {color:#a02f26;}
+.auditor-worksheet-stats {display:flex;flex-wrap:wrap;gap:8px;}
+.auditor-worksheet-stats span {border:1px solid var(--border,#a7b2bc);border-radius:8px;padding:8px 10px;font-size:.8rem;}
+.auditor-worksheet-stats strong {font-variant-numeric:tabular-nums;font-size:1rem;}
+.auditor-worksheet-disclaimer,.auditor-worksheet-unparsed {font-size:.83rem;line-height:1.5;}
+.auditor-worksheet-unparsed {border:1px solid #d5a743;border-radius:8px;padding:10px;background:#fff8e8;color:#4b3918;}
+.auditor-worksheet-unparsed ul {padding-left:20px;max-height:160px;overflow:auto;}
+.auditor-worksheet-tools {display:flex;gap:10px;flex-wrap:wrap;align-items:end;justify-content:space-between;}
+.auditor-worksheet-tools label {flex:1;min-width:190px;display:grid;gap:5px;font-size:.82rem;}
+.auditor-worksheet-filter {display:flex;gap:7px;flex-wrap:wrap;}
+.auditor-worksheet-section {padding:0;overflow:hidden;}
+.auditor-worksheet-section h3 {padding:12px 14px;margin:0;border-bottom:1px solid var(--border,#b1bac3);}
+.auditor-worksheet-section h3 small {font-size:.7rem;font-weight:400;color:var(--muted-foreground,#5f6872);margin-left:5px;}
+.auditor-worksheet-rows {display:grid;}
+.auditor-worksheet-row {padding:10px 14px;border-bottom:1px solid var(--border,#c3cad1);min-width:0;}
+.auditor-worksheet-row:last-child {border-bottom:0;}
+.auditor-worksheet-main {display:grid;grid-template-columns:minmax(125px,1fr) minmax(180px,2fr) minmax(120px,1fr);align-items:start;gap:9px;font-size:.84rem;}
+.auditor-worksheet-main strong {overflow-wrap:anywhere;}
+.auditor-worksheet-value {white-space:pre-wrap;overflow-wrap:anywhere;font-variant-numeric:tabular-nums;}
+.auditor-worksheet-state {text-align:right;font-size:.74rem;font-weight:650;}
+.auditor-worksheet-state.missing,.auditor-worksheet-state.conflict {color:#a02f26;}
+.auditor-worksheet-state.case-only {color:#a15c07;}
+.auditor-worksheet-state.extracted {color:#305c88;}
+.auditor-worksheet-state.confirmed {color:#276947;}
+.auditor-worksheet-note {font-size:.75rem;margin:4px 0 0;color:var(--muted-foreground,#59636c);}
+.auditor-worksheet-evidence {font-size:.78rem;margin-top:6px;}
+.auditor-worksheet-evidence summary {cursor:pointer;max-width:100%;font-weight:550;}
+.auditor-evidence-source {border:1px solid var(--border,#bbc3cd);border-radius:7px;padding:9px;margin-top:7px;display:grid;gap:5px;overflow-wrap:anywhere;}
+.auditor-evidence-source small {color:var(--muted-foreground,#59636c);}
+.auditor-evidence-source a {text-decoration:underline;}
+@media(max-width:760px){.auditor-worksheet-main{grid-template-columns:1fr;gap:4px;}.auditor-worksheet-state{text-align:left;}}
+
+/* Auditor worksheet can exceed several viewports: size tabs by content rather than shrinking flex children into a large empty scroll tail. */
+.keyin-panel { display:block; }
+.keyin-panel .case-tabs { min-height:auto; }
