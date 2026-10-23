@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - feature/broker-step4a-ui
       - feature/broker-review-step3e
       - 'review/signed-evidence-integrity-*'
       - 'review/real-document-underwriting-*'
@@ -58,6 +59,13 @@ jobs:
         timeout-minutes: 7
         run: |
           node --experimental-transform-types tests/broker-role-browser.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Broker Step 4A actual MVR DASH Chromium form smoke
+        timeout-minutes: 7
+        run: |
+          node --check tests/broker-step4a-browser.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/broker-step4a-browser.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Report missing harness output
         if: always()
