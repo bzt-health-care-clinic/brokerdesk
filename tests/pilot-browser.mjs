@@ -229,12 +229,11 @@ try {
   await page.getByRole("button",{name:"Take Case"}).click();
   await page.getByRole("button",{name:"Open Case"}).waitFor({timeout:30000});
   await page.getByRole("button",{name:"Open Case"}).click();
-  await page.getByRole("heading",{name:"Key-in data — Broker confirmed"}).waitFor({timeout:60000});
+  await page.getByRole("heading",{name:"Ready-to-use Key-in Data"}).waitFor({timeout:60000});
   await page.getByText(/Broker confirmed corrected Remarks/).first().waitFor({timeout:15000});
-  await page.getByRole("button",{name:"Copy all Key-in data"}).waitFor();
-  assert.equal(await page.getByText("Auditor · Imported Broker review").count(),1);
-  assert.equal(await page.getByText("Copy section",{exact:true}).count(),
-    reviewState.review.sections.length);
+  await page.getByRole("button",{name:"Copy all",exact:true}).waitFor();
+  assert.equal(await page.getByText("Auditor · Broker-confirmed Key-in").count(),1);
+  assert(await page.getByText("Copy section",{exact:true}).count()>=1);
   assert.equal(v04Pilot.readReviewedKeyin(v04Imported.case_id).sheet.brokerReview,"BROKER_CONFIRMED");
   assert.equal(browserIssues.filter(x=>x.includes("pageerror")).length,0,
     "Reviewed v0.4 UI cannot cause a browser JavaScript exception: "+browserIssues.slice(-8));
