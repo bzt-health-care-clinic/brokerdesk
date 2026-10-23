@@ -75,6 +75,17 @@ try {
   browser=await chromium.launch({headless:true});
   const page=await browser.newPage();
   page.setDefaultTimeout(25000);
+  const apiTrace=[];
+  page.on("request",request=>{
+    if(request.url().includes("/broker-review"))apiTrace.push(request.method()+" "+request.url());
+  });
+  page.on("requestfailed",request=>{
+    if(request.url().includes("/broker-review"))
+      apiTrace.push("FAILED "+request.url()+" "+String(request.failure()?.errorText));
+  });
+  page.on("console",message=>{
+    if(message.type()==="error")apiTrace.push("CONSOLE "+message.text());
+  });
   await page.route(api+"/cases/SYN4A/broker-review**",async route=>{
     const request=route.request(),method=request.method();
     if(method==="OPTIONS"){
@@ -111,7 +122,13 @@ try {
   await mvr.getByLabel("MVR Classification (Minor / Major / offence type) 1").fill("Minor");
   await mvr.getByLabel("MVR Offence Description 1").fill("Synthetic speeding");
   await mvr.getByRole("button",{name:"Save report"}).click();
-  await until(()=>edits.length===1,"MVR field PATCH");
+  await delay(700);
+  console.log("Step 4A MVR save diagnostic:",JSON.stringify({
+    editorIssues:await mvr.locator('[role="alert"]').allTextContents(),
+    pageIssues:await page.getByRole("alert").allTextContents(),
+    requests:apiTrace.slice(-16),edits:edits.length
+  }));
+  await until(()=>edits.length===1,"MVR field PATCH",18000);
   assert.equal(edits[0].fieldId,"report:mvr:synthetic-mvr.summary");
   assert.equal(edits[0].value.hasConvictions,true);
   assert.equal(edits[0].value.convictions.length,1);
