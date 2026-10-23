@@ -61,7 +61,7 @@ const state={
   },
   sourceIssues:[],fieldIssues:[],confirmed:0,total:2,ready:false
 };
-const edits=[];let confirmations=0;
+const edits=[];let confirmations=0;const routeTrace=[];
 const header={
   "access-control-allow-origin":"*",
   "access-control-allow-headers":"content-type",
@@ -88,22 +88,31 @@ try {
   });
   await page.route(api+"/cases/SYN4A/broker-review**",async route=>{
     const request=route.request(),method=request.method();
-    if(method==="OPTIONS"){
-      await route.fulfill({status:204,headers:header,body:""});return;
+    routeTrace.push(method+" "+request.url());
+    try {
+      if(method==="OPTIONS"){
+        await route.fulfill({status:204,headers:header,body:""});return;
+      }
+      const pathname=new URL(request.url()).pathname;
+      if(method==="PATCH"&&pathname.endsWith("/fields")){
+        const body=request.postDataJSON();
+        routeTrace.push("PATCH PAYLOAD "+JSON.stringify(body));
+        edits.push(body);
+        const f=state.review.fields.find(f=>f.id===body.fieldId);
+        if(!f) {
+          await route.fulfill({status:422,headers:header,body:JSON.stringify({error:"Unknown synthetic field"})});return;
+        }
+        f.value=body.value;state.review.revision++;
+      } else if(method==="POST"&&pathname.endsWith("/sections")){
+        confirmations++;
+      } else if(method!=="GET") {
+        await route.fulfill({status:405,headers:header,body:JSON.stringify({error:"Unsupported synthetic request"})});return;
+      }
+      await route.fulfill({status:200,headers:header,body:JSON.stringify(state)});
+    }catch(e){
+      routeTrace.push("HANDLER ERROR "+String(e));
+      await route.fulfill({status:500,headers:header,body:JSON.stringify({error:String(e)})}).catch(()=>{});
     }
-    const pathname=new URL(request.url()).pathname;
-    if(method==="PATCH"&&pathname.endsWith("/fields")){
-      const body=request.postDataJSON();
-      assert.equal(body.expectedRevision,state.review.revision);
-      const f=state.review.fields.find(f=>f.id===body.fieldId);
-      assert(f,"Review field not found");
-      f.value=body.value;state.review.revision++;edits.push(body);
-    } else if(method==="POST"&&pathname.endsWith("/sections")){
-      confirmations++;
-    } else if(method!=="GET") {
-      await route.fulfill({status:405,headers:header,body:JSON.stringify({error:"Unsupported synthetic request"})});return;
-    }
-    await route.fulfill({status:200,headers:header,body:JSON.stringify(state)});
   });
   await page.goto(front+"/broker-review?caseId=SYN4A",{waitUntil:"domcontentloaded"});
   await page.getByRole("heading",{name:"Broker Key-in Review"}).waitFor();
@@ -126,10 +135,11 @@ try {
   console.log("Step 4A MVR save diagnostic:",JSON.stringify({
     editorIssues:await mvr.locator('[role="alert"]').allTextContents(),
     pageIssues:await page.getByRole("alert").allTextContents(),
-    requests:apiTrace.slice(-16),edits:edits.length
+    requests:apiTrace.slice(-16),routeTrace:routeTrace.slice(-12),edits:edits.length
   }));
   await until(()=>edits.length===1,"MVR field PATCH",18000);
   assert.equal(edits[0].fieldId,"report:mvr:synthetic-mvr.summary");
+  assert.equal(edits[0].expectedRevision,1);
   assert.equal(edits[0].value.hasConvictions,true);
   assert.equal(edits[0].value.convictions.length,1);
   await until(async()=>await page.getByRole("button",{name:"Confirm this page"}).isEnabled(),"MVR save clearing dirty");
