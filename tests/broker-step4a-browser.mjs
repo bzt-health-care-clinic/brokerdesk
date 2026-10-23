@@ -5,6 +5,7 @@
  */
 import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
+import {createServer} from "node:http";
 import {mkdtempSync,rmSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
@@ -21,7 +22,7 @@ Object.assign(env,{BROKERDESK_DATA_DIR:temp,BROKERDESK_LOCAL_API_PORT:"47847",
   NEXT_PUBLIC_BROKERDESK_LOCAL_API_URL:api,BROKERDESK_LOCAL_FRONTEND_ORIGIN:front,
   NEXT_PUBLIC_BROKERDESK_MODE:"broker",BROKERDESK_MODE:"broker",
   BROKERDESK_FAST_LOCAL:"true",NEXT_TELEMETRY_DISABLED:"1"});
-const children=[];let browser;
+const children=[];let browser;let mockApi;
 function start(args) {
   let output="";
   const child=spawn(process.execPath,args,{cwd:root,env,windowsHide:true,stdio:["ignore","pipe","pipe"]});
@@ -69,6 +70,47 @@ const header={
   "content-type":"application/json"
 };
 try {
+  // Use a real loopback HTTP server: Chromium CORS preflight requests are not
+  // reliably intercepted by page.route(), especially for JSON PATCH requests.
+  mockApi=createServer(async(request,response)=>{
+    const method=request.method??"GET";
+    routeTrace.push(method+" "+String(request.url));
+    const respond=(status,body="")=>{
+      response.writeHead(status,header);
+      response.end(typeof body==="string"?body:JSON.stringify(body));
+    };
+    try {
+      if(method==="OPTIONS"){respond(204);return;}
+      const pathname=new URL(request.url??"/",api).pathname;
+      if(!pathname.startsWith("/cases/SYN4A/broker-review")){respond(404,{error:"Wrong synthetic case"});return;}
+      if(method==="PATCH" && pathname.endsWith("/fields")){
+        const chunks=[];
+        for await(const chunk of request)chunks.push(chunk);
+        const payload=JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        routeTrace.push("PATCH PAYLOAD "+JSON.stringify(payload));
+        edits.push(payload);
+        const field=state.review.fields.find(f=>f.id===payload.fieldId);
+        if(!field){respond(422,{error:"Unknown synthetic field"});return;}
+        if(payload.expectedRevision!==state.review.revision){
+          respond(409,{error:"Synthetic revision conflict"});return;
+        }
+        field.value=payload.value;
+        state.review.revision++;
+      } else if(method==="POST" && pathname.endsWith("/sections")){
+        confirmations++;
+      } else if(method!=="GET"){
+        respond(405,{error:"Unsupported synthetic method"});return;
+      }
+      respond(200,state);
+    }catch(e){
+      routeTrace.push("HANDLER ERROR "+String(e));
+      respond(500,{error:String(e)});
+    }
+  });
+  await new Promise((resolve,reject)=>{
+    mockApi.once("error",reject);
+    mockApi.listen(47847,"127.0.0.1",resolve);
+  });
   const frontLogs=start(["scripts/run-framework.mjs","dev","--port","5197","--hostname","127.0.0.1"]);
   await until(async()=>(await fetch(front+"/broker-review?caseId=SYN4A")).ok,"Broker Review frontend",90000);
   const {chromium}=await import("playwright");
@@ -85,34 +127,6 @@ try {
   });
   page.on("console",message=>{
     if(message.type()==="error")apiTrace.push("CONSOLE "+message.text());
-  });
-  await page.route(api+"/cases/SYN4A/broker-review**",async route=>{
-    const request=route.request(),method=request.method();
-    routeTrace.push(method+" "+request.url());
-    try {
-      if(method==="OPTIONS"){
-        await route.fulfill({status:204,headers:header,body:""});return;
-      }
-      const pathname=new URL(request.url()).pathname;
-      if(method==="PATCH"&&pathname.endsWith("/fields")){
-        const body=request.postDataJSON();
-        routeTrace.push("PATCH PAYLOAD "+JSON.stringify(body));
-        edits.push(body);
-        const f=state.review.fields.find(f=>f.id===body.fieldId);
-        if(!f) {
-          await route.fulfill({status:422,headers:header,body:JSON.stringify({error:"Unknown synthetic field"})});return;
-        }
-        f.value=body.value;state.review.revision++;
-      } else if(method==="POST"&&pathname.endsWith("/sections")){
-        confirmations++;
-      } else if(method!=="GET") {
-        await route.fulfill({status:405,headers:header,body:JSON.stringify({error:"Unsupported synthetic request"})});return;
-      }
-      await route.fulfill({status:200,headers:header,body:JSON.stringify(state)});
-    }catch(e){
-      routeTrace.push("HANDLER ERROR "+String(e));
-      await route.fulfill({status:500,headers:header,body:JSON.stringify({error:String(e)})}).catch(()=>{});
-    }
   });
   await page.goto(front+"/broker-review?caseId=SYN4A",{waitUntil:"domcontentloaded"});
   await page.getByRole("heading",{name:"Broker Key-in Review"}).waitFor();
@@ -174,6 +188,7 @@ try {
   throw e;
 }finally{
   await browser?.close().catch(()=>{});
+  if(mockApi){mockApi.closeAllConnections();await new Promise(resolve=>mockApi.close(resolve));}
   for(const child of children.reverse()){
     if(child.exitCode!==null||child.signalCode!==null)continue;
     child.kill();
