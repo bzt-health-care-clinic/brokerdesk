@@ -7,7 +7,7 @@ import type { UploadedDocumentRecord } from "@/lib/extraction-types";
 import { buildAuditorWorksheet, auditorWorksheetText, type WorksheetStatus } from "@/lib/auditor-worksheet";
 import { localRepositories } from "@/lib/local-repositories";
 import { fetchAuditorReviewedKeyin, type ReviewedKeyinResponse } from "@/lib/auditor-reviewed-client";
-import { AuditorReviewedKeyinPanel } from "@/components/auditor-reviewed-keyin-panel"; // STEP3_AUDITOR_SHEET
+import { AuditorStructuredKeyinPanel } from "@/components/auditor-structured-keyin-panel"; // STEP4B_AUDITOR_SHEET
 
 const STYLES:Record<WorksheetStatus,string>={
   "extracted":"extracted","confirmed":"confirmed","missing":"missing",
@@ -51,7 +51,7 @@ export function AuditorWorksheetPanel({data,records}:{data:InsuranceCase;records
   if(reviewedState.caseId!==data.case_id||reviewedState.kind==="loading")
     return <p role="status">Loading imported Auditor worksheet...</p>;
   if(reviewedState.kind==="ready")
-    return <AuditorReviewedKeyinPanel review={reviewedState.data}/>;
+    return <AuditorStructuredKeyinPanel review={reviewedState.data}/>;
   if(reviewedState.kind==="error")
     return <p role="alert">Unable to verify imported Broker worksheet: {reviewedState.message}</p>;
 
