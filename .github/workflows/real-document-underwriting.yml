@@ -2,6 +2,7 @@ name: BrokerDesk real-document-derived synthetic regressions
 on:
   push:
     branches:
+      - feature/auditor-step4b
       - feature/broker-step4a-ui
       - feature/broker-review-step3e
       - 'review/real-document-underwriting-*'
