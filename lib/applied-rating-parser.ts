@@ -118,7 +118,39 @@ export function parseAppliedRating(raw:RawExtractedDocument,type:DocumentType):P
     parsedAt:new Date().toISOString(),confidence:.85,data:{},fieldEvidence:{},warnings:[],entities:[],layoutVersion:1};
   const blocked=new Set<string>();
   const auto=type==='AUTO_APPLICATION'||type==='AUTO_QUOTE';
+  // Applied carrier-detail pages print an explicit quote number separately
+  // from their geometric input tables. Never substitute a job URL, Applied
+  // reference, policy number or an excluded vehicle's identifier.
+  // A plain-text assertion is accepted only with a clear label and reliable
+  // extracted page confidence; origin page is retained for Broker review.
   for(const page of raw.pages??[]){
+    if(type==='AUTO_QUOTE'){
+      const quoteLine=/^\s*(?:[■●•]\s*)?(?:Here\s+is\s+your\s+quote\s+number|Quote\s+(?:Number|No\.?))\s*:\s*(Q[A-Z0-9-]{7,29})\b/i;
+      for(const line of (page.text??'').split(/\r?\n/)){
+        const match=line.match(quoteLine);
+        if(!match)continue;
+        const value=match[1].toUpperCase();
+        const block=page.blocks?.find(part=>part.text.includes(match[1]));
+        const confidence=Math.min(page.confidence??raw.confidence??0,block?.confidence??1);
+        const proof:FieldEvidence={
+          page:page.pageNumber??page.page,text:line.trim(),
+          ...(block?.boundingBox?{boundingBox:{...block.boundingBox}}:{}),
+          confidence
+        };
+        result.fieldEvidence.quoteNumber=[...(result.fieldEvidence.quoteNumber??[]),proof];
+        if(confidence<.9){
+          delete result.data.quoteNumber;blocked.add('quoteNumber');
+          result.warnings.push({code:'CRITICAL_FIELD_REVIEW_REQUIRED',field:'quoteNumber',severity:'medium',
+            message:'Explicit Applied quote number has low extraction confidence; inspect the carrier detail page.'});
+        }else if(!blocked.has('quoteNumber')){
+          if(result.data.quoteNumber!==undefined && result.data.quoteNumber!==value){
+            delete result.data.quoteNumber;blocked.add('quoteNumber');
+            result.warnings.push({code:'NEEDS_REVIEW',field:'quoteNumber',severity:'medium',
+              message:'Conflicting Applied quote numbers; no Quote # selected.'});
+          }else result.data.quoteNumber=value;
+        }
+      }
+    }
     const reader=new LayoutReader(page,dictionary);
     if(!reader.cells.length){result.warnings.push({code:'NEEDS_REVIEW',severity:'medium',message:`Page ${page.page} needs layout coordinates before Applied table values can be extracted.`});continue;}
     // Only explicit entity/table headings establish identity. A VIN elsewhere on the page does not.
