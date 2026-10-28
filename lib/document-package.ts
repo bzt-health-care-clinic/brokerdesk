@@ -9,6 +9,20 @@ export function documentTypeIsFound(records: UploadedDocumentRecord[], types: Do
   return types.some((type) => active.has(type));
 }
 
+/**
+ * Display-only status. A physical Ownership upload can exist while its page
+ * failed extraction or it has no accepted logical section. This MUST NOT
+ * satisfy the authoritative VIN/Ownership evidence gate.
+ */
+export function ownershipReceiptDisplay(received: boolean, records: UploadedDocumentRecord[]):
+  "FOUND_SECTION" | "UPLOADED_UNVERIFIED" | "MISSING" {
+  if(received)return "FOUND_SECTION";
+  const uploaded=records.some(record=>record.documentType==="OWNERSHIP" &&
+    record.currentSourceHash!=="MISSING" &&
+    !(record.sourceHash && record.currentSourceHash && record.sourceHash!==record.currentSourceHash));
+  return uploaded?"UPLOADED_UNVERIFIED":"MISSING";
+}
+
 export function applyDocumentPresence<T extends { documents: Array<{ category: string; received: boolean }>; ownership?: { received: boolean } }>(item: T, records: UploadedDocumentRecord[]): T {
   const categoryTypes: Record<string, DocumentType[]> = { signed_application: ["AUTO_APPLICATION", "HAB_APPLICATION"], quote: ["AUTO_QUOTE", "HAB_QUOTE"], ownership: ["OWNERSHIP"], bill_of_sale: ["BILL_OF_SALE"], vehicle_photo: ["VEHICLE_PHOTO"], payment_authorization: ["PAYMENT_AUTHORIZATION"], cancellation_request: ["CANCELLATION_REQUEST"], mvr: ["MVR"], dash: ["DASH"], previous_policy: ["PRIOR_AUTO_POLICY", "PRIOR_PROPERTY_POLICY"], lease_agreement: ["LEASE_DOCUMENT"], finance_document: ["FINANCE_DOCUMENT"], winter_tire_proof: ["WINTER_TIRE_PROOF"], mortgage_document: ["MORTGAGE_DOCUMENT"], void_cheque: ["VOID_CHEQUE"], signed_change_form: ["OPCF_FORM", "POLICY_CHANGE"] };
   const active = activeDocumentTypes(records); const next = structuredClone(item);
