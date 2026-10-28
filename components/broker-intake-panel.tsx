@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import type { InsuranceCase, Vehicle, Driver, PolicyChangeTransactionType } from "@/lib/insurance-types";
 import type { UploadedDocumentRecord } from "@/lib/extraction-types";
 import { activeParsedSources } from "@/lib/active-evidence";
-import { applyDocumentPresence } from "@/lib/document-package";
+import { applyDocumentPresence, ownershipReceiptDisplay } from "@/lib/document-package";
 import { POLICY_CHANGE_TRANSACTIONS } from "@/lib/policy-change";
 import { hasOwnershipSectionForVehicle, confirmVehicleOwnership } from "@/lib/broker-file-intake";
 
@@ -230,10 +230,22 @@ export function BrokerIntakePanel({data,records,onChange}:Props){
       <p>Checklist is calculated from active classified source sections. A filename alone cannot
         prove a required document has been received.</p>
       <div className="broker-document-status">
-        {presence.documents.filter(d=>d.required).map(doc=><div key={doc.id}
-          className={doc.received?"received":"missing"}>
-          <strong>{doc.received?"Found":"Missing"}</strong><span>{doc.name}</span>
-        </div>)}
+        {presence.documents.filter(d=>d.required).map(doc=>{
+          const ownership=doc.category==="ownership";
+          const receipt=ownership?ownershipReceiptDisplay(doc.received,records):
+            (doc.received?"FOUND_SECTION":"MISSING");
+          return <div key={doc.id} className={doc.received?"received":"missing"}>
+            <strong>{receipt==="UPLOADED_UNVERIFIED"?"Uploaded · unverified":
+              receipt==="FOUND_SECTION"&&ownership?"Found section":
+              doc.received?"Found":"Missing"}</strong>
+            <span>{doc.name}</span>
+            {receipt==="UPLOADED_UNVERIFIED"&&
+              <small>File received, but no verified Ownership section. Check the original,
+                scan/OCR status and VIN before completing the submission.</small>}
+            {receipt==="FOUND_SECTION"&&ownership&&
+              <small>Section found; each vehicle's VIN/owner evidence still requires confirmation.</small>}
+          </div>;
+        })}
         {!presence.documents.some(doc=>doc.required)&&
           <p>Transaction-specific document checks appear in the right-side Preflight panel.</p>}
       </div>
