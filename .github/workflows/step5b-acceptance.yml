@@ -55,6 +55,84 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci --include=dev --include=optional --no-audit --no-fund
+      - name: Install pinned real Tesseract 5 with English model
+        timeout-minutes: 12
+        run: |
+          choco install tesseract --version=5.5.0.20241111 --yes --no-progress --limit-output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exe = Join-Path $env:ProgramFiles 'Tesseract-OCR\tesseract.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw "Pinned Tesseract executable missing." }
+          $version = (& $exe --version 2>&1 | Out-String)
+          Write-Host "Installed OCR engine: $($version.Split([Environment]::NewLine)[0])"
+          if ($version -notmatch 'tesseract 5\.5\.0') { throw "Wrong Tesseract version." }
+          $languages = (& $exe --list-langs 2>&1 | Out-String)
+          if ($languages -notmatch '(?m)^\s*eng\s*
+        run: |
+          $files = @(Get-ChildItem -LiteralPath 'tests' -Filter 'step5b*.test.mjs' -File | Sort-Object Name | ForEach-Object { $_.FullName })
+          Write-Host "Step 5B test files: $($files.Count)"
+          if ($files.Count -ne 19) { throw 'Expected all 19 Step 5B test files; do not silently skip tests.' }
+          # document-ingestion.ts uses TS parameter properties; Node 24's default strip-only mode is insufficient.
+          & node --experimental-transform-types --test @files
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  original-layout:
+    name: Layout and geometric source regressions
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --include=dev --include=optional --no-audit --no-fund
+      - name: Original Layout Parser
+        run: |
+          node --experimental-transform-types tests/layout-parsers.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Original Layout Boundary Safety
+        run: |
+          node --experimental-transform-types tests/layout-boundary-safety.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Original signed application OCR regression
+        run: |
+          node --experimental-transform-types tests/signed-application-ocr.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  typescript-build:
+    name: TypeScript and Windows production build
+    runs-on: windows-2022
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --include=dev --include=optional --no-audit --no-fund
+      - name: TypeScript semantic check
+        run: |
+          & .\node_modules\.bin\tsc.cmd --noEmit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Production build
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+) { throw "English tessdata model missing." }
+          "BROKERDESK_TESSERACT_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "BROKERDESK_REQUIRE_REAL_TESSERACT=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Mandatory two real local OCR integration tests
+        run: |
+          node --test tests/step5b03-engine-smoke.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: All Step 5B synthetic and wiring tests
         run: |
           $files = @(Get-ChildItem -LiteralPath 'tests' -Filter 'step5b*.test.mjs' -File | Sort-Object Name | ForEach-Object { $_.FullName })

@@ -133,6 +133,41 @@ export async function createRuntime() {
         body: JSON.stringify({ error:'Synthetic local OCR failure',code:'OCR_LOCAL_PROCESS_FAILED' }) });
     }
   }
+  // Test-only OCR bridge: Chromium/Playwright may redact multipart File bodies in
+  // intercepted requests. The browser sends its actual FormData File bytes to
+  // this binding before any transport serialization. No customer files are used,
+  // and this stub is never installed in production.
+  async function handleLocalOcrBrowser(payload) {
+    assert(payload && typeof payload === 'object');
+    const path = payload.path;
+    const method = payload.method;
+    assert((path === '/local-ocr/health' && method === 'GET') ||
+      (path === '/local-ocr' && method === 'POST'), 'Only exact local OCR routes are allowed');
+    let contentType;
+    let encoded;
+    if (method === 'POST') {
+      const bytes = Buffer.from(payload.base64 ?? '', 'base64');
+      assert(bytes.length > 0 && bytes.length <= 8 * 1024 * 1024, 'Rendered OCR image must have actual bytes');
+      assert.equal(bytes.length, payload.declaredSize, 'Browser File size differs from transferred bytes');
+      assert.equal(bytes.toString('base64'), payload.base64, 'Browser OCR byte transfer is not canonical');
+      assert.match(payload.mimeType, /^image\/(?:png|jpeg)$/i);
+      const form = new FormData();
+      form.append('file', new File([bytes], payload.filename, { type: payload.mimeType }), payload.filename);
+      const request = new Request(backend + path, { method: 'POST', body: form });
+      contentType = request.headers.get('content-type');
+      encoded = Buffer.from(await request.arrayBuffer());
+    }
+    let response;
+    const route = {
+      request: () => ({ url: () => backend + path, method: () => method,
+        headers: () => ({ 'content-type': contentType }), postDataBuffer: () => encoded }),
+      fulfill: async options => { response = options; }
+    };
+    await handleLocalOcr(route);
+    assert(response && Number.isInteger(response.status), 'Local OCR test stub did not return a response');
+    return { status: response.status, contentType: response.contentType ?? 'application/json',
+      body: response.body };
+  }
   // Whitelisted child environment: no inherited OCR/API secrets or customer paths.
   const env = Object.fromEntries(['PATH','Path','SystemRoot','WINDIR','TEMP','TMP','COMSPEC','PATHEXT','USERPROFILE','HOME','APPDATA','LOCALAPPDATA'].filter(k => process.env[k]).map(k => [k, process.env[k]]));
   Object.assign(env, { BROKERDESK_LOCAL_API_PORT: '47841', BROKERDESK_LOCAL_FRONTEND_ORIGIN: frontend, NEXT_PUBLIC_BROKERDESK_LOCAL_API_URL: backend, BROKERDESK_FAST_LOCAL: 'true', OCRSPACE_API_KEY: 'synthetic-test-token-not-a-real-key', OCRSPACE_API_URL: 'http://127.0.0.1:47842/parse/image', OCRSPACE_MAX_FILE_BYTES: '1048576', OCRSPACE_MAX_PDF_PAGES: '3', OCRSPACE_TIMEOUT_MS: '5000', NEXT_TELEMETRY_DISABLED: '1' });
@@ -152,7 +187,7 @@ export async function createRuntime() {
     await waitReady(backend + '/health', apiProcess); return apiProcess.pid;
   }
   return {
-    run, artifacts, calls, cloudCalls, handleLocalOcr, get data() { return data; },
+    run, artifacts, calls, cloudCalls, handleLocalOcr, handleLocalOcrBrowser, get data() { return data; },
     failProviderOnce() { failNext = true; },
     async start() { const front = launch('frontend', ['scripts/run-framework.mjs','dev','--port','5183','--hostname','127.0.0.1']); await waitReady(frontend, front); },
     async reset(name) { await stop(apiProcess); data = resolve(run, `data-${name}`); await startBackend(); assert.deepEqual(await api('/cases'), []); },

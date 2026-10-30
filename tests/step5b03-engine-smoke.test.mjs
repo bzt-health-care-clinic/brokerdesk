@@ -7,7 +7,10 @@ import {localOcrHealth,requestLocalTesseract} from "../local-server/local-tesser
 const home=dirname(fileURLToPath(import.meta.url));
 test("real local Tesseract 5 reads only a synthetic test image",async(t)=>{
  const health=await localOcrHealth();
- if(health.state!=="ONLINE"){t.skip("Tesseract 5 English model not installed on this machine");return;}
+ if(health.state!=="ONLINE"){
+  if(process.env.BROKERDESK_REQUIRE_REAL_TESSERACT==="1")assert.fail("Mandatory Tesseract 5 English OCR integration unavailable: "+health.state);
+  t.skip("Tesseract 5 English model not installed on this machine");return;
+ }
  const bytes=await readFile(join(home,"synthetic-ownership.png"));
  const result=await requestLocalTesseract(new File([bytes],"synthetic.png",{type:"image/png"}));
  assert.equal(result.metadata.provider,"local_tesseract");
@@ -19,7 +22,10 @@ test("real local Tesseract 5 reads only a synthetic test image",async(t)=>{
 
 test("rotated synthetic scan never becomes automatically VIN-verified",async(t)=>{
  const health=await localOcrHealth();
- if(health.state!=="ONLINE"){t.skip("Tesseract 5 not installed");return;}
+ if(health.state!=="ONLINE"){
+  if(process.env.BROKERDESK_REQUIRE_REAL_TESSERACT==="1")assert.fail("Mandatory rotated Tesseract 5 OCR integration unavailable: "+health.state);
+  t.skip("Tesseract 5 not installed");return;
+ }
  const bytes=await readFile(join(home,"synthetic-ownership-rotated.png"));
  try {
    const result=await requestLocalTesseract(new File([bytes],"rotated.png",{type:"image/png"}));

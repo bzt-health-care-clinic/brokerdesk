@@ -61,14 +61,40 @@ try {
         await rt.reset(scenario.id);
         context = await browser.newContext({ viewport: { width:1440,height:1000 }, serviceWorkers: 'block' });
         await context.route('**/*', route => { const url = new URL(route.request().url()); return [frontend,backend].includes(url.origin) ? route.continue() : route.abort('blockedbyclient'); });
-        // More-specific Playwright route has precedence over the loopback guard.
-        // Only the synthetic OCR transport is intercepted; UI and storage stay real.
-        await context.route('**/local-ocr**', route => {
-          const url = new URL(route.request().url());
-          if (url.origin === backend && ['/local-ocr','/local-ocr/health'].includes(url.pathname))
-            return rt.handleLocalOcr(route);
-          return route.fallback();
-        });
+        // C/E exercise real UI upload and PDF.js rendering, but local OCR is
+        // deterministic test-only. Capture the actual browser File bytes before
+        // Playwright's intercepted multipart body can be redacted/emptied.
+        // A/B/D continue to use the real offline local-health response.
+        if (scenario.id === 'C' || scenario.id === 'E') {
+          await context.exposeBinding('__brokerdeskAcceptanceLocalOcr', async (_source, payload) =>
+            rt.handleLocalOcrBrowser(payload));
+          await context.addInitScript(backendOrigin => {
+            const nativeFetch = window.fetch.bind(window);
+            window.fetch = async (input, init) => {
+              const target = new URL(typeof input === 'string' || input instanceof URL ? String(input) : input.url, location.href);
+              if (target.origin !== backendOrigin ||
+                  !['/local-ocr', '/local-ocr/health'].includes(target.pathname))
+                return nativeFetch(input, init);
+              const method = String(init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+              const payload = { path: target.pathname, method };
+              if (method === 'POST' && target.pathname === '/local-ocr') {
+                const form = init?.body;
+                if (!(form instanceof FormData)) throw new Error('Local OCR requires browser FormData');
+                const file = form.get('file');
+                if (!(file instanceof File) || !file.size) throw new Error('Local OCR requires a nonempty browser File');
+                const bytes = new Uint8Array(await file.arrayBuffer());
+                let binary = '';
+                for (let i = 0; i < bytes.length; i += 16384)
+                  binary += String.fromCharCode(...bytes.subarray(i, i + 16384));
+                Object.assign(payload, { filename: file.name, mimeType: file.type,
+                  declaredSize: file.size, base64: btoa(binary) });
+              }
+              const reply = await window.__brokerdeskAcceptanceLocalOcr(payload);
+              return new Response(reply.body, { status: reply.status,
+                headers: { 'content-type': reply.contentType } });
+            };
+          }, backend);
+        }
         await context.tracing.start({ screenshots:true, snapshots:true, sources:false }); tracingStarted = true;
         page = await context.newPage(); page.setDefaultTimeout(12000); page.setDefaultNavigationTimeout(60000);
         page.on('worker', worker => scenario.workers.push(worker.url()));

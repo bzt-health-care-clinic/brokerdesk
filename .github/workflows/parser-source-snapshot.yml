@@ -2,7 +2,12 @@ name: Parser code-only verification snapshot
 on:
   push:
     branches: [feature/broker-auditor-lan-pilot, fix/step5b-acceptance-20261030]
-    paths: [.github/workflows/parser-source-snapshot.yml]
+    paths:
+      - '.github/workflows/parser-source-snapshot.yml'
+      - '.github/workflows/step5b-acceptance.yml'
+      - 'tests/acceptance/**'
+      - 'tests/browser-acceptance.mjs'
+      - 'tests/step5b03-engine-smoke.test.mjs'
 permissions:
   contents: read
 jobs:
