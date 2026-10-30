@@ -15,6 +15,8 @@ The eleven required measurement domains are VIN, Ownership, Driver Assignment, M
 - `REVIEW_REQUIRED`: source meaning is unknown and the item remains unconfirmed/flagged; not an automated match.
 - `NOT_APPLICABLE`: excluded from the denominator, but does not fulfill a mandatory domain.
 
+The reported *automated source-known coverage* denominator contains only independently checked `PRESENT` or `EXPLICIT_ZERO` facts; an `UNKNOWN` / Needs Review safety test is counted separately and cannot artificially lower or inflate the automated extraction rate.
+
 An empty conviction/claim array is **not** full-report zero-count proof. A Pulled Date page is **not** a count declaration page. A six-year-only claim count cannot be presented as a full-report count. An absent source is never converted into a confident “No”.
 
 ## Privacy boundary

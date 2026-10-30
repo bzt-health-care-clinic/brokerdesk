@@ -81,6 +81,9 @@ test('all eleven mandatory domains measured; synthetic never claims real accepta
   assert.equal(status(r,'AUTO_CORRECT_PROVEN'),10);
   assert.equal(status(r,'REVIEW_REQUIRED'),1);
   assert.equal(r.totals.measured,11);
+  assert.equal(r.totals.source_known_fields,10);
+  assert.equal(r.totals.needs_review_safety_checks,1);
+  assert.equal(r.totals.auto_correct_rate_percent,100);
   assert.equal(r.real_sample_accuracy_certified,false);
 });
 test('real results are pending human thresholds and signoff, not certified automatically',()=>{
