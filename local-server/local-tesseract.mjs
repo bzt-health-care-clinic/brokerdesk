@@ -71,7 +71,7 @@ export async function localOcrHealth(env = process.env, runner = execFile) {
   try {
     const { stdout, stderr } = await runner(config.binary, ["--version"], { timeout: 3000, maxBuffer: 1024 * 1024, windowsHide: true });
     const versionLine = String(stdout || stderr).split(/\r?\n/)[0];
-    const match = versionLine.match(/tesseract\s+(\d+\.\d+(?:\.\d+)?)/i);
+    const match = versionLine.match(/tesseract\s+v?(\d+\.\d+(?:\.\d+)?)/i);
     if (!match || Number(match[1].split(".")[0]) < 5)
       return { state: "DEGRADED", provider: "local_tesseract", mode: "LOCAL_ONLY", version: match?.[1], maxFileBytes: MAX_BYTES };
     const langs=await runner(config.binary, ["--list-langs"],
