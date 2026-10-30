@@ -8,6 +8,7 @@ on:
       - feature/broker-review-step3e
       - 'review/signed-evidence-integrity-*'
       - 'review/real-document-underwriting-*'
+      - feature/broker-auditor-lan-pilot
       - fix/step5b-acceptance-20261030
   pull_request:
     branches:

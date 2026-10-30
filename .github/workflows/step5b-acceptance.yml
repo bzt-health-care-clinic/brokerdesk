@@ -3,6 +3,7 @@ name: BrokerDesk Step 5B isolated acceptance (Windows Node 24)
 on:
   push:
     branches:
+      - feature/broker-auditor-lan-pilot
       - fix/step5b-acceptance-20261030
   workflow_dispatch:
 
