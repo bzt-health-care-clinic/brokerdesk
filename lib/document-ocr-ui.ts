@@ -1,12 +1,13 @@
 import type { UploadedDocumentRecord } from "./extraction-types.ts";
 import { hasReusableText, savedText } from "./local-reparse.ts";
+import { reusablePage } from "./pdf-page-ocr-status.ts"; // Step 5B-03
 
 export function documentOcrUi(record: UploadedDocumentRecord, providerState: string, busy = false) {
   const pdf = record.mimeType === "application/pdf" || /\.pdf$/i.test(record.fileName);
   const supportsOcr = pdf || record.mimeType.startsWith("image/") || /\.(png|jpe?g|webp|tiff?|bmp)$/i.test(record.fileName);
-  const reusable = hasReusableText(record);
   const pages = record.packagePages ?? [];
-  const partial = Boolean(record.packageProgress?.status === "PARTIAL" || pages.length && (pages.some(p => p.extractionStatus !== "COMPLETE" || !p.text?.trim()) || pages.length < (record.pageCount ?? record.packageProgress?.total ?? pages.length)));
+  const reusable = hasReusableText(record) || (pages.length>0 && pages.every(reusablePage));
+  const partial = Boolean(record.packageProgress?.status === "PARTIAL" || pages.length && (pages.some(p => !reusablePage(p)) || pages.length < (record.pageCount ?? record.packageProgress?.total ?? pages.length)));
   const needsExtraction = !reusable || partial;
   const unavailable = providerState !== "ONLINE";
   const missingFile = record.currentSourceHash === "MISSING";
@@ -18,7 +19,7 @@ export function documentOcrUi(record: UploadedDocumentRecord, providerState: str
   const failed = record.state === "FAILED" || record.raw?.metadata?.status === "FAILED";
   const required = record.staleExtraction || /Re-extraction required/i.test(record.error ?? "");
   const complete = reusable && !partial;
-  const cloudText = record.raw?.metadata?.provider === "ocr_space" || pages.some(p => p.extractionProvider === "ocr_space" || p.extractionProvider === "paddle_ocr");
+  const cloudText = record.raw?.metadata?.provider === "local_tesseract" || pages.some(p => ["ocr_space","paddle_ocr","local_tesseract"].includes(p.extractionProvider));
   let status: string;
   if (failed) status = "OCR failed · manual review available";
   else if (partial) status = "Partial PDF processing · missing/failed pages need extraction";
@@ -35,7 +36,7 @@ export function documentOcrUi(record: UploadedDocumentRecord, providerState: str
     summary: status, fieldCount, chars,
     reparseLabel: "Reparse saved text (local)",
     ocrLabel: pdf ? "OCR missing/failed pages" : "OCR document",
-    regenerateLabel: "Regenerate OCR (uses quota)",
+    regenerateLabel: "Regenerate OCR (local CPU)",
     showOcr: supportsOcr && needsExtraction,
     showRegenerate: supportsOcr,
     canReparse: reusable && !processing,

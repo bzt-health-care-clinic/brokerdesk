@@ -2,6 +2,10 @@ import { isDriverReport, reportBoundary, reportIdentity, savedPageText, SECTION_
 import { classifyDocument, EXTRACTION_PIPELINE_VERSION, normalizeOcrText, PARSER_VERSION, parserFor } from "./document-ingestion.ts";
 import type { DocumentType, LogicalDocument, PackagePage, ParsedSource, SuggestedLogicalDocument, UploadedDocumentRecord } from "./extraction-types.ts";
 import { sectionRevision } from "./active-evidence.ts";
+import { trustedOcrPage } from "./ocr-page-geometry.ts";
+import { coalesceSignedApplicationSuggestions, prepareSignedApplicationPages } from "./signed-application-grouping.ts"; // STEP5B04_SIGNED_APPLICATION
+import { reusablePage } from "./pdf-page-ocr-status.ts"; // Step 5B-03
+import { extractPdfPage } from "./pdf-page-ocr-runner.ts";
 
 export const PACKAGE_EMBEDDED_TEXT_MIN_CHARACTERS = 40;
 /**
@@ -22,9 +26,9 @@ const label = (type: DocumentType) => type.replaceAll("_", " ").replace(/\b\w/g,
 const hash = (value: string | Uint8Array) => { let result = 2166136261; const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value; for (const byte of bytes) result = Math.imul(result ^ byte, 16777619); return (result >>> 0).toString(16); };
 const continuitySignals = (text: string) => [...new Set([...(text.match(/\bpage\s+\d+\s+(?:of|\/)\s*\d+\b/gi) ?? []), ...(text.match(/\b(?:continued|continuation)\b/gi) ?? []), ...(text.match(/\b(?:policy|report|quote)\s*(?:number|no\.?|#)?\s*[:#-]?\s*[A-Z0-9-]{4,}\b/gi) ?? [])])];
 
-export interface PdfPageSource { pageCount: number; embeddedText(page: number): Promise<string>; renderPage(page: number, targetBytes: number): Promise<File>; close(): Promise<void> | void; }
+export interface PdfPageSource { pageCount: number; embeddedPage?(page: number): Promise<import("./extraction-types.ts").ExtractedPage>; embeddedText(page: number): Promise<string>; isBlankPage?(page: number): Promise<boolean>; renderPage(page: number, targetBytes: number): Promise<File>; close(): Promise<void> | void; }
 export interface PdfPageAdapter { open(file: File): Promise<PdfPageSource>; }
-export interface PageOcrTransport { extract(file: File, options?: { pageCount?: number; startPage?: number; endPage?: number }): Promise<{ text?: string; pages?: Array<{ text?: string; blocks?: unknown[]; rotation?: 0 | 90 | 180 | 270 }>; confidence?: number; metadata?: Record<string, unknown> }>; }
+export interface PageOcrTransport { extract(file: File, options?: { pageCount?: number; startPage?: number; endPage?: number }): Promise<{ text?: string; pages?: Array<{ text?: string; blocks?: unknown[]; rotation?: 0 | 90 | 180 | 270; width?: number; height?: number; confidence?: number }>; confidence?: number; metadata?: Record<string, unknown> }>; }
 
 export class PdfBrowserRendererUnavailableError extends Error {
   readonly code = "PDF_BROWSER_RENDERER_UNAVAILABLE";
@@ -87,7 +91,7 @@ export function discoverLogicalSections(record: UploadedDocumentRecord, pages: P
       classificationConfidence: confidence, createdAt: prior?.createdAt ?? stamp, updatedAt: stamp,
       suggestionStatus: priorSuggestions.get(id) === "IGNORED" ? "IGNORED" : needsReview ? "PENDING" : priorSuggestions.get(id) ?? (confidence >= .9 ? "ACCEPTED" : "PENDING"), evidenceSignals };
   });
-  return { manual, suggestions };
+  return { manual, suggestions: coalesceSignedApplicationSuggestions(record, pages, suggestions) };
 }
 
 export async function parseSections(record: UploadedDocumentRecord, pages: PackagePage[], sections: LogicalDocument[]) {
@@ -95,7 +99,7 @@ export async function parseSections(record: UploadedDocumentRecord, pages: Packa
   for (const section of sections) {
     const parser = parserFor(section.documentType); if (!parser) continue; const selected = pages.filter((page) => page.page >= (section.startPage ?? 1) && page.page <= (section.endPage ?? section.startPage ?? 1)).map(page => ({ ...page, text: savedPageText(page) })); const text = selected.map((page) => page.text ?? "").join("\n"); if (!text.trim()) continue;
     const parsed = await parser.parse({ text, rawText: text, normalizedText: normalizeOcrText(text), pages: selected, confidence: Math.min(...selected.map((page) => page.confidence ?? .8)), metadata: { fileId: record.id, originalPhysicalFile: record.originalFileName ?? record.fileName, startPage: section.startPage, endPage: section.endPage } }, { fileName: record.fileName });
-    for (const evidence of Object.values(parsed.fieldEvidence).flat()) { const page = selected.find((item) => item.page === evidence.page) ?? selected[0]; evidence.provider = page?.extractionProvider; evidence.physicalFileName = record.originalFileName ?? record.fileName; }
+    for (const evidence of [parsed, ...(parsed.entities ?? [])].flatMap(part => Object.values(part.fieldEvidence).flat())) { const page = selected.find((item) => item.page === evidence.page) ?? selected[0]; evidence.provider = page?.extractionProvider; evidence.physicalFileName = record.originalFileName ?? record.fileName; }
     sources.push({ ...parsed, documentId: record.id, logicalDocumentId: section.id, sourceRevision: sectionRevision(section), subjectType: section.subjectType, subjectId: section.subjectId });
   }
   return sources;
@@ -106,34 +110,34 @@ export async function analyzePdfPackage(record: UploadedDocumentRecord, file: Fi
   if (record.sourceHash && record.sourceHash !== sourceHash) record = { ...record, packagePages: [], raw: undefined, parsed: undefined, parsedSources: undefined };
   record = { ...record, sourceHash, currentSourceHash: sourceHash };
   const source = await adapter.open(file); const existing = new Map((record.packagePages ?? []).map((page) => [page.page, page])); const pages: PackagePage[] = []; const pending: number[] = [];
-  for (let page = 1; page <= source.pageCount; page += 1) { const cached = existing.get(page); if (!options.force && cached?.extractionStatus === "COMPLETE") pages.push(cached); else pending.push(page); }
+  for (let page = 1; page <= source.pageCount; page += 1) { const cached = existing.get(page); if (!options.force && cached && reusablePage(cached) && (!source.embeddedPage || cached.extractionProvider !== "embedded_pdf_text" || Boolean(cached.blocks?.some(block => Boolean(block.text?.trim()) && block.boundingBox && [block.boundingBox.x, block.boundingBox.y, block.boundingBox.width, block.boundingBox.height].every(Number.isFinite) && block.boundingBox.width > 0 && block.boundingBox.height > 0)) || cached.pageOcrStatus === "BLANK_PAGE")) pages.push(cached); else pending.push(page); }
   let current: UploadedDocumentRecord = { ...record, extractionVersion: EXTRACTION_PIPELINE_VERSION, parserVersion: PARSER_VERSION, staleExtraction: false, pageCount: source.pageCount, containerType: source.pageCount > 1 ? "COMBINED_AUTO_PACKAGE" : record.containerType, packagePages: [...pages].sort((a, b) => a.page - b.page), packageProgress: { status: "ANALYZING", processed: pages.length, total: source.pageCount, embedded: pages.filter((page) => page.extractionProvider === "embedded_pdf_text").length, ocr: pages.filter((page) => page.extractionProvider === "ocr_space" || page.extractionProvider === "paddle_ocr").length, failed: pages.filter((page) => page.extractionStatus === "FAILED").length, updatedAt: new Date().toISOString() } };
-  let persistChain = Promise.resolve(); const persist = async () => { current.packagePages = [...pages].sort((a, b) => a.page - b.page); current.packageProgress = { status: "ANALYZING", processed: pages.length, total: source.pageCount, embedded: pages.filter((page) => page.extractionProvider === "embedded_pdf_text").length, ocr: pages.filter((page) => page.extractionProvider === "ocr_space").length, failed: pages.filter((page) => page.extractionStatus === "FAILED").length, updatedAt: new Date().toISOString() }; const snapshot = structuredClone(current); persistChain = persistChain.then(async () => { await options.onProgress?.(snapshot); }); await persistChain; };
+  let persistChain = Promise.resolve(); const persist = async () => { current.packagePages = [...pages].sort((a, b) => a.page - b.page); current.packageProgress = { status: "ANALYZING", processed: pages.length, total: source.pageCount, embedded: pages.filter((page) => page.extractionProvider === "embedded_pdf_text").length, ocr: pages.filter((page) => ["ocr_space","paddle_ocr","local_tesseract"].includes(page.extractionProvider)).length, failed: pages.filter((page) => page.extractionStatus === "FAILED").length, updatedAt: new Date().toISOString() }; const snapshot = structuredClone(current); persistChain = persistChain.then(async () => { await options.onProgress?.(snapshot); }); await persistChain; };
   try {
-    let cursor = 0; const worker = async () => { while (cursor < pending.length) { const pageNumber = pending[cursor++]; try { const embedded = await source.embeddedText(pageNumber); if (!embeddedTextNeedsOcr(embedded)) pages.push({ page: pageNumber, pageNumber, text: embedded, confidence: .99, extractionProvider: "embedded_pdf_text", extractionStatus: "COMPLETE", classification: classifyDocument(record.fileName, "application/pdf", embedded), sourceHash: hash(embedded) }); else { const derivative = await source.renderPage(pageNumber, Math.floor(options.maxOcrBytes * .9)); try { const extracted = await ocr.extract(derivative, { pageCount: 1, startPage: 1, endPage: 1 }); const text = normalizeOcrText(extracted.text ?? extracted.pages?.map((page) => page.text ?? "").join("\n") ?? ""); pages.push({ page: pageNumber, pageNumber, text, blocks: extracted.pages?.[0]?.blocks as never, rotation: extracted.pages?.[0]?.rotation, confidence: extracted.confidence ?? .8, extractionProvider: String(extracted.metadata?.provider ?? "ocr_space") === "paddle_ocr" ? "paddle_ocr" : "ocr_space", extractionStatus: text ? "COMPLETE" : "FAILED", classification: classifyDocument(record.fileName, "image/jpeg", text), sourceHash: hash(new Uint8Array(await derivative.arrayBuffer())), error: text ? undefined : "OCR returned no text." }); } finally { /* Browser derivative is released after this iteration and is never persisted. */ } } } catch (error) { pages.push({ page: pageNumber, pageNumber, text: "", confidence: 0, extractionProvider: "none", extractionStatus: "FAILED", classification: { documentType: "OTHER", confidence: .1, reason: "Page extraction failed." }, sourceHash: "", error: error instanceof Error ? error.message : "Page extraction failed." }); } await persist(); } };
-    await Promise.all(Array.from({ length: Math.max(1, Math.min(2, options.concurrency ?? 1, pending.length || 1)) }, worker));
-    // A G4Sign/signed-application package is one application with many pages,
-    // not unrelated documents based on incidental phrases ("Leased: No",
-    // "Driver Training: No", etc.). Use cover identity only when unambiguous.
-    const signedPacket = /^g4sign[\s._-]/i.test(record.fileName) || /signed.*(?:home|hab|auto).*app/i.test(record.fileName);
-    if (signedPacket) {
-      const cover = pages.filter(page => page.page <= 2).map(page => page.text ?? "").join("\n");
-      const hasHab = /\bHABITATIONAL\s+INSURANCE\b/i.test(cover);
-      const hasAuto = /\bAUTOMOBILE\s+INSURANCE\b/i.test(cover);
-      const family = hasHab !== hasAuto ? (hasHab ? "HAB_APPLICATION" : "AUTO_APPLICATION") : undefined;
-      if (family) {
-        for (const page of pages) if (page.extractionStatus === "COMPLETE" &&
-          !/^\s*(?:DASH\s+DRIVER\s+REPORT|MVR\s+ABSTRACTS|ONTARIO\s+DRIVING\s+RECORD)\b/im.test(page.text ?? "")) {
-          page.classification = { documentType: family, confidence: .95, reason: "Confirmed signed application package cover." };
-        }
-        record = { ...record, documentType: family,
-          classification: { documentType: family, confidence: .95, reason: "Signed application package cover." } };
+
+    // Step 5B-03: retry only missing pages; do not alter original file bytes.
+    let cursor=0;
+    const worker=async()=>{
+      while(cursor<pending.length){
+        const pageNumber=pending[cursor++];
+        const result=await extractPdfPage({source,pageNumber,fileName:record.fileName,
+          ocr,maxOcrBytes:options.maxOcrBytes,
+          helpers:{needsOcr:embeddedTextNeedsOcr,normalize:normalizeOcrText,
+            classify:classifyDocument,geometry:trustedOcrPage}});
+        pages.push(result);
+        await persist();
       }
-    }
+    };
+    await Promise.all(Array.from({length:Math.max(1,Math.min(2,options.concurrency??1,pending.length||1))},worker));
+
+    // STEP5B04_SIGNED_APPLICATION: cover-anchored grouping, never swallow distinct attachments.
+    const signedPacket=prepareSignedApplicationPages(record,pages);
+    pages.splice(0,pages.length,...signedPacket.pages);
+    record=signedPacket.record;
     const { manual, suggestions } = discoverLogicalSections(record, pages); const accepted = suggestions.filter((item) => item.suggestionStatus === "ACCEPTED"); const logicalDocuments = [...manual, ...accepted]; const parsedSources = await parseSections(record, pages, logicalDocuments);
-    const failed = pages.filter((page) => page.extractionStatus === "FAILED").length; const charactersExtracted = pages.reduce((total, page) => total + (page.text?.length ?? 0), 0);
+    const failed = pages.filter((page) => page.extractionStatus === "FAILED").length; const untrustedOcr = pages.some(page => (["ocr_space","paddle_ocr","local_tesseract"].includes(page.extractionProvider)) && (!page.ocrGeometryVerified || (page.confidence ?? 0) < .85)); const charactersExtracted = pages.reduce((total, page) => total + (page.text?.length ?? 0), 0);
     const unanimousType = !failed && pages.length && pages.every(page => page.classification.documentType === pages[0].classification.documentType) && pages[0].classification.documentType !== "OTHER" ? pages[0].classification : undefined;
-    current = { ...current, documentType: unanimousType?.documentType ?? current.documentType, classification: unanimousType ?? current.classification, state: failed || suggestions.some(s => isDriverReport(s.documentType) && s.suggestionStatus === "PENDING") ? "NEEDS_REVIEW" : "PARSED", extractionVersion: EXTRACTION_PIPELINE_VERSION, parserVersion: PARSER_VERSION, packagePages: [...pages].sort((a, b) => a.page - b.page), sectionAnalysisVersion: SECTION_ANALYSIS_VERSION, suggestedSections: suggestions, logicalDocuments, parsedSources, raw: { metadata: { ...record.raw?.metadata, provider: "page_package_pipeline", originalPhysicalFile: record.originalFileName ?? record.fileName, pageLevel: true, charactersExtracted, pageCount: pages.length } }, packageProgress: { status: failed ? "PARTIAL" : "COMPLETE", processed: pages.length, total: source.pageCount, embedded: pages.filter((page) => page.extractionProvider === "embedded_pdf_text").length, ocr: pages.filter((page) => page.extractionProvider === "ocr_space" || page.extractionProvider === "paddle_ocr").length, failed, updatedAt: new Date().toISOString() } };
+    current = { ...current, documentType: unanimousType?.documentType ?? record.documentType ?? current.documentType, classification: unanimousType ?? current.classification, state: failed || untrustedOcr || parsedSources.some(source => source.warnings.length || source.entities?.some(entity => entity.warnings.length)) || suggestions.some(s => (isDriverReport(s.documentType) || s.documentType === "AUTO_APPLICATION" || s.documentType === "HAB_APPLICATION") && s.suggestionStatus === "PENDING") ? "NEEDS_REVIEW" : "PARSED", extractionVersion: EXTRACTION_PIPELINE_VERSION, parserVersion: PARSER_VERSION, packagePages: [...pages].sort((a, b) => a.page - b.page), sectionAnalysisVersion: SECTION_ANALYSIS_VERSION, suggestedSections: suggestions, logicalDocuments, parsedSources, raw: { metadata: { ...record.raw?.metadata, provider: "page_package_pipeline", originalPhysicalFile: record.originalFileName ?? record.fileName, pageLevel: true, charactersExtracted, pageCount: pages.length } }, packageProgress: { status: failed ? "PARTIAL" : "COMPLETE", processed: pages.length, total: source.pageCount, embedded: pages.filter((page) => page.extractionProvider === "embedded_pdf_text").length, ocr: pages.filter((page) => page.extractionProvider === "ocr_space" || page.extractionProvider === "paddle_ocr").length, failed, updatedAt: new Date().toISOString() } };
     await options.onProgress?.(structuredClone(current)); return current;
   } finally { await source.close(); }
 }

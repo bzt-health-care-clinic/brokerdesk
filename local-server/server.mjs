@@ -4,9 +4,12 @@ import { spawn } from "node:child_process";
 import { openDatabase, migrateSourceHashBaselines, migrateLogicalDocuments } from "./database.mjs";
 import { resolveDataPaths } from "./paths.mjs";
 import { LocalRepositories } from "./repositories.mjs";
+import { SubmissionPilotService } from "./submission-service.mjs";
 import { ocrSpaceHealth, requestOcrSpace } from "./ocr-space.mjs";
+import { localOcrHealth, requestLocalTesseract } from "./local-tesseract.mjs"; // Step 5B-03
 import { loadLocalEnvironment } from "./env-loader.mjs";
 import { localAllowedOrigins } from "./origins.mjs";
+import { BrokerReviewService } from "./broker-review-integration.mjs"; // STEP2_BROKER_REVIEW_IMPORT
 
 loadLocalEnvironment();
 
@@ -20,6 +23,9 @@ migrateSourceHashBaselines(db, paths.base);
 // a no-op and listDocuments stays a pure read.
 migrateLogicalDocuments(db);
 const repositories = new LocalRepositories(db, paths);
+const pilot = new SubmissionPilotService(db, paths, repositories);
+const brokerReview = new BrokerReviewService(db, repositories); // STEP2_BROKER_REVIEW_SERVICE
+const brokerOnly = process.env.BROKERDESK_MODE === "broker";
 repositories.cleanTemp();
 const host = "127.0.0.1";
 const port = Number(process.env.BROKERDESK_LOCAL_API_PORT || 47831);
@@ -50,8 +56,93 @@ export const server = http.createServer(async (request, response) => {
       const notes = selectedId ? repositories.getNotes(selectedId) : {};
       return sendJson(response, request, 200, { cases, selected, documents, notes });
     }
+    if (request.method === "GET" && url.pathname === "/local-ocr/health")
+      return sendJson(response,request,200,await localOcrHealth());
+    if (request.method === "POST" && url.pathname === "/local-ocr") {
+      const form=await readForm(request);
+      const file=form.get("file");
+      try { return sendJson(response,request,200,await requestLocalTesseract(file)); }
+      catch(error) { return sendJson(response,request,error.status||502,
+        {error:error.message,code:error.code||"OCR_LOCAL_FAILED"}); }
+    }
     if (request.method === "GET" && url.pathname === "/ocr-space/health") return sendJson(response, request, 200, ocrSpaceHealth());
     if (request.method === "POST" && url.pathname === "/ocr-space") { const form = await readForm(request); const file = form.get("file"); if (!(file instanceof File)) throw Object.assign(new Error("File is required"), { status: 400, code: "OCR_INVALID_INPUT" }); try { const raw = await requestOcrSpace(file, { pageCount: form.get("pageCount"), startPage: form.get("startPage"), endPage: form.get("endPage"), isTable: form.get("isTable") === "true" }); return sendJson(response, request, 200, raw); } catch (error) { return sendJson(response, request, error.status || 502, { error: error.message, code: error.code || "OCR_PROVIDER_ERROR" }); } }
+    // Pilot v0.3: still LOOPBACK only. LAN exposure requires HTTPS and
+    // authenticated Auditor sessions in a later rollout.
+    // STEP2_BROKER_REVIEW_ROUTE: local Broker draft; not a BDZIP approval.
+    const reviewRoute = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/broker-review(?:\/(rebuild|fields|sections|remarks-preview))?$/);
+    if (reviewRoute) {
+      if (!brokerOnly) return sendJson(response, request, 403, { error: "Broker Review is only available in Broker mode." });
+      const result = brokerReview.handle(reviewRoute[1], reviewRoute[2] || "",
+        request.method, ["GET","HEAD"].includes(request.method) ? null : await readJson(request));
+      return sendJson(response, request, result.status, result.body);
+    }
+    // STEP3_REVIEWED_READ_ROUTE: old v0.3 imports remain unconfirmed.
+    const confirmedSheet = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/reviewed-keyin$/);
+    if (confirmedSheet && request.method === "GET") {
+      if (brokerOnly) return sendJson(response,request,403,{error:"Auditor mode required."});
+      const caseId = confirmedSheet[1];
+      // No Broker-confirmed sheet is normal for an existing v0.3/local Case.
+      // Return an empty SUCCESS response so normal worksheet loading does not
+      // generate console/network 404 failures; unknown Cases still return 404.
+      if (!db.prepare("SELECT 1 FROM cases WHERE id=? AND deleted_at IS NULL").get(caseId))
+        return sendJson(response,request,404,{error:"Case not found."});
+      try {
+        return sendJson(response,request,200,pilot.readReviewedKeyin(caseId));
+      } catch (error) {
+        if (error?.status === 404) {
+          response.writeHead(204,headers(request));
+          return response.end();
+        }
+        throw error;
+      }
+    }
+    const preflight = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/preflight$/);
+    if (preflight && request.method === "GET")
+      return sendJson(response, request, 200, pilot.preflight(preflight[1]));
+    const bundle = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/bdzip$/);
+    if (bundle && request.method === "POST") {
+      const { filename, archive } = pilot.exportCase(bundle[1], (await readJson(request)).broker);
+      response.writeHead(200, headers(request, {
+        "Content-Type": "application/zip", "Content-Length": archive.length,
+        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Access-Control-Expose-Headers": "Content-Disposition",
+      }));
+      return response.end(archive);
+    }
+    const insuredCompare = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/insured-name-comparison$/);
+    if (insuredCompare && request.method === "POST") return sendJson(response,request,200,
+      repositories.saveNamedInsuredComparison(insuredCompare[1],await readJson(request)));
+    const opcf43Target = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/opcf43-vehicle-target$/);
+    if (opcf43Target && request.method === "POST") return sendJson(response,request,200,
+      repositories.saveIntakeOpcf43Target(opcf43Target[1],await readJson(request)));
+    const verifyIntakeProof = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/intake-proof$/);
+    if (verifyIntakeProof && request.method === "POST") return sendJson(response,request,200,
+      repositories.saveIntakeProof(verifyIntakeProof[1],await readJson(request)));
+    const reviewDiscounts = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/discount-review$/);
+    if (reviewDiscounts && request.method === "POST") return sendJson(response,request,200,
+      repositories.saveIntakeDiscountReview(reviewDiscounts[1],await readJson(request)));
+    const reviewWarningFacts = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/warning-facts$/);
+    if (reviewWarningFacts && request.method === "POST") return sendJson(response,request,200,
+      repositories.saveIntakeWarningFacts(reviewWarningFacts[1],await readJson(request)));
+    const authorizeChange = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)\/change-authorization$/);
+    if (authorizeChange && request.method === "POST")
+      return sendJson(response, request, 200, repositories.saveTransactionAuthorization(authorizeChange[1], await readJson(request)));
+    if (request.method === "POST" && url.pathname === "/submissions/import") {
+      if (brokerOnly) return sendJson(response, request, 403, { error: "Only an Auditor workstation can import submissions." });
+      const archive = await readBody(request, 50 * 1024 * 1024);
+      const filename = url.searchParams.get("filename") || "submission.bdzip";
+      return sendJson(response, request, 201, pilot.importArchive(archive, filename));
+    }
+    if (request.method === "GET" && url.pathname === "/inbox") {
+      if (brokerOnly) return sendJson(response, request, 403, { error: "Inbox is not available in Broker mode." });
+      return sendJson(response, request, 200, pilot.listInbox(url.searchParams.get("system")));
+    }
+    const inboxAction = url.pathname.match(/^\/inbox\/([A-Za-z0-9_-]+)\/(claim|release|renew|complete)$/);
+    if (inboxAction && request.method === "POST") {
+      if (brokerOnly) return sendJson(response, request, 403, { error: "Inbox actions require Auditor mode." });
+      return sendJson(response, request, 200, pilot.updateTask(inboxAction[1], "AUDITOR-1", inboxAction[2]));
+    }
     if (request.method === "GET" && url.pathname === "/cases") return sendJson(response, request, 200, repositories.listCases(url.searchParams.get("search") || "", url.searchParams.get("archived") === "true"));
     if (request.method === "POST" && url.pathname === "/cases") return sendJson(response, request, 201, repositories.upsertCase(await readJson(request), "CREATE_CASE"));
     const caseMatch = url.pathname.match(/^\/cases\/([A-Za-z0-9_-]+)$/);
@@ -86,7 +177,7 @@ export const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/settings/clean-temp") return sendJson(response, request, 200, repositories.cleanTemp());
     if (request.method === "POST" && url.pathname === "/settings/open-folder") { if (process.platform !== "win32") return sendJson(response, request, 409, { error: "Open Data Folder is available on Windows only." }); spawn("explorer.exe", [paths.base], { detached: true, windowsHide: true, stdio: "ignore" }).unref(); return sendJson(response, request, 200, { ok: true }); }
     return sendJson(response, request, 404, { error: "Not found" });
-  } catch (error) { return sendJson(response, request, error.status || 500, { error: error instanceof Error ? error.message : "Local storage error" }); }
+  } catch (error) { return sendJson(response, request, error.status || 500, { error: error instanceof Error ? error.message : "Local storage error", ...(Array.isArray(error.blockers) ? { blockers: error.blockers } : {}) }); }
 });
 
 server.on("error", (error) => {

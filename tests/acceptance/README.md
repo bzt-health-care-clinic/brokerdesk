@@ -8,7 +8,7 @@ Command in an authorized clean checkout with repository dependencies and the wor
 node tests/browser-acceptance.mjs
 ```
 
-This serial Playwright API runner has one browser, a fresh context per scenario, zero retries, a 15-minute watchdog and per-action/poll limits. It runs the existing preflight first. Nonzero preflight produces BLOCKED for A–E, never acceptance pass. Existing 403 protection is configured with the exact frontend origin http://127.0.0.1:5183; API is 47841 and test provider is 47842, all loopback. No existing service/normal data directory is reused.
+This serial Playwright API runner has one browser, a fresh context per scenario, zero retries, a 15-minute watchdog and per-action/poll limits. It runs the existing preflight first. Nonzero preflight produces BLOCKED for A–E, never acceptance pass. Existing origin protection uses the exact frontend origin http://127.0.0.1:5183; API is 47841. Local-only OCR requests are intercepted by Playwright at that loopback origin. The obsolete cloud stub at 47842 is a zero-use canary. No existing service/normal data directory is reused.
 
 ## Original scenario coverage
 
@@ -24,7 +24,7 @@ All application writes are through UI. Backend GETs and read-only SQLite queries
 
 ## OCR and safety
 
-Only OCR.Space's external HTTP boundary is stubbed. The real app uploads/rendering, local API validation, multipart transport, response normalization, parser, reconciliation and SQLite run unchanged. The loopback stub accepts only named synthetic scan inputs, rejects full PDFs, and scales declared authoring PDF-point boxes to the actual JPEG/PNG dimensions. It produces a clearly declared synthetic provider response, not live OCR evidence. Backend fetch is restricted by a test-only preload to that endpoint. Browser external requests are blocked. No production injection/default changes.
+The current app's local-only `/local-ocr` transport is stubbed at the Playwright HTTP boundary to simulate installed Tesseract without changing production code. Real browser PDF.js rendering, multipart request creation, parser/reconciliation and SQLite run unchanged, but **the local-server Tesseract HTTP handler and actual OCR engine are NOT tested**. Only explicitly named synthetic scan inputs are accepted, full PDFs are rejected, and ground-truth PDF-point boxes are scaled to actual rendered JPEG/PNG dimensions. The obsolete cloud OCR stub remains as a zero-use canary: any cloud request fails the suite. Backend external fetches are test-guarded. No real-client data or real OCR accuracy claim.
 
 LIVE_OCR is always NOT_RUN (zero), not merely dependent on missing credentials. The child gets a whitelisted environment and dummy test token. Application .env files cause refusal before startup. Fresh data is under ignored tests/.acceptance-runs/ae-*/data-A through data-E; these directories are never artifacts. Each scenario starts from empty SQLite; A/D restart the actual backend process against unchanged test storage (not an OS restart).
 

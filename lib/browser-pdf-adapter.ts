@@ -4,6 +4,7 @@ import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?worker&url";
 import workerSource from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?raw";
 import { normalizeOcrText } from "./document-ingestion";
 import { pdfTextLines } from "./pdf-text-lines";
+import { pdfLayoutPage } from "./pdf-layout";
 import type { PdfPageAdapter, PdfPageSource } from "./package-analysis";
 
 let configured = false;
@@ -28,7 +29,19 @@ export class BrowserPdfPageAdapter implements PdfPageAdapter {
     const pdfDocument = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()), useSystemFonts: true }).promise;
     return {
       pageCount: pdfDocument.numPages,
+      // Step 5B-03: only zero PDF rendering operators qualify as a known blank.
+      // A white-looking scan is NOT assumed blank; it still needs OCR.
+      async isBlankPage(pageNumber) {
+        const page=await pdfDocument.getPage(pageNumber);
+        const operators=await page.getOperatorList();
+        return operators.fnArray.length===0;
+      },
       async embeddedText(pageNumber) { const page = await pdfDocument.getPage(pageNumber); const content = await page.getTextContent(); return normalizeOcrText(pdfTextLines(content.items.map((item) => "str" in item ? item : {}))); },
+      async embeddedPage(pageNumber) {
+        const page = await pdfDocument.getPage(pageNumber);
+        const content = await page.getTextContent();
+        return pdfLayoutPage(content.items.map(item => "str" in item ? item : {}), page.getViewport({scale:1}), pageNumber);
+      },
       async renderPage(pageNumber, targetBytes) {
         const page = await pdfDocument.getPage(pageNumber); let scale = 2.8; let quality = .88; let output: Blob | null = null;
         for (let attempt = 0; attempt < 5; attempt += 1) {

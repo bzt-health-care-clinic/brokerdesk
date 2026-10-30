@@ -1,13 +1,13 @@
 import type { CaseType } from "./insurance-types.ts";
 
-export type DocumentType = "AUTO_APPLICATION" | "AUTO_QUOTE" | "OWNERSHIP" | "BILL_OF_SALE" | "VEHICLE_PHOTO" | "MVR" | "DASH" | "DRIVER_TRAINING_CERTIFICATE" | "PAYMENT_AUTHORIZATION" | "CANCELLATION_REQUEST" | "PRIOR_AUTO_POLICY" | "LEASE_DOCUMENT" | "FINANCE_DOCUMENT" | "WINTER_TIRE_PROOF" | "HAB_APPLICATION" | "HAB_QUOTE" | "PRIOR_PROPERTY_POLICY" | "MORTGAGE_DOCUMENT" | "OPCF_FORM" | "POLICY_CHANGE" | "PORTAL_SCREENSHOT" | "VOID_CHEQUE" | "CTSAC_MEMBERSHIP_APPLICATION" | "DEGREE_CERTIFICATE" | "DIPLOMA" | "OTHER" | "MANUAL" | "CLIENT_CONFIRMED_FACT";
+export type DocumentType = "AUTO_APPLICATION" | "AUTO_QUOTE" | "OWNERSHIP" | "BILL_OF_SALE" | "VEHICLE_PHOTO" | "SAFETY_INSPECTION" | "STUDENT_PROOF" | "ANTI_THEFT_PROOF" | "RETIREMENT_PROOF" | "MVR" | "DASH" | "DRIVER_TRAINING_CERTIFICATE" | "PAYMENT_AUTHORIZATION" | "CANCELLATION_REQUEST" | "PRIOR_AUTO_POLICY" | "LEASE_DOCUMENT" | "FINANCE_DOCUMENT" | "WINTER_TIRE_PROOF" | "HAB_APPLICATION" | "HAB_QUOTE" | "PRIOR_PROPERTY_POLICY" | "MORTGAGE_DOCUMENT" | "OPCF_FORM" | "POLICY_CHANGE" | "PORTAL_SCREENSHOT" | "VOID_CHEQUE" | "CTSAC_MEMBERSHIP_APPLICATION" | "DEGREE_CERTIFICATE" | "DIPLOMA" | "OTHER" | "MANUAL" | "CLIENT_CONFIRMED_FACT";
 export type ProcessingState = "UPLOADED" | "CLASSIFYING" | "CLASSIFIED" | "EXTRACTING" | "OCR_PENDING" | "PARSED" | "NEEDS_REVIEW" | "FAILED";
 
 export interface ExtractionInput { fileId: string; fileName: string; mimeType: string; documentType?: DocumentType; }
 export interface BoundingBox { x: number; y: number; width: number; height: number; }
 export interface ExtractedBlock { text: string; confidence?: number; boundingBox?: BoundingBox; }
 export interface ExtractedPage { page: number; pageNumber?: number; text?: string; confidence?: number; width?: number; height?: number; rotation?: 0 | 90 | 180 | 270; blocks?: ExtractedBlock[]; }
-export interface PackagePage extends ExtractedPage { extractionProvider: "embedded_pdf_text" | "ocr_space" | "paddle_ocr" | "none"; extractionStatus: "COMPLETE" | "FAILED"; classification: ClassificationResult; sourceHash: string; error?: string; }
+export interface PackagePage extends ExtractedPage { ocrGeometryVerified?: boolean; extractionProvider: "embedded_pdf_text" | "ocr_space" | "paddle_ocr" | "local_tesseract" | "none"; extractionStatus: "COMPLETE" | "FAILED"; /** Step 5B-03, supplementary page diagnostic; legacy status preserved */ pageOcrStatus?: import("./pdf-page-ocr-status.ts").PageOcrStatus; classification: ClassificationResult; sourceHash: string; error?: string; }
 export interface RawExtractedDocument { text?: string; rawText?: string; normalizedText?: string; pages?: ExtractedPage[]; metadata?: Record<string, unknown>; confidence?: number; }
 export interface FieldEvidence { page?: number; text?: string; boundingBox?: BoundingBox; confidence?: number; provider?: string; physicalFileName?: string; }
 export interface ExtractionWarning { code: string; message: string; field?: string; severity: "high" | "medium" | "info"; }
@@ -32,3 +32,21 @@ export interface ManualCorrection<T = unknown> { originalExtractedValue: T; corr
 // Physical-file identity is distinct from each rendered page's sourceHash.
 export interface UploadedDocumentRecord { sectionAnalysisVersion?: number; sourceHash?: string; currentSourceHash?: string; withdrawnParsedSources?: ParsedSource[]; withdrawnSectionRanges?: { startPage: number; endPage: number }[]; }
 export interface ParsedSource<T = Record<string, unknown>> { claimRecordId?: string; logicalDocumentId?: string; sourceRevision?: string; subjectType?: string; subjectId?: string; lineOfBusiness?: "AUTO" | "HAB"; }
+
+/** Extracted groups are source observations, not confirmed rated vehicles or policy drivers. */
+export interface ParsedEntity {
+  id: string;
+  kind: 'VEHICLE' | 'DRIVER' | 'PROPERTY' | 'POLICY_HISTORY';
+  label: string;
+  excluded?: boolean;
+  data: Record<string, unknown>;
+  fieldEvidence: Record<string, FieldEvidence[]>;
+  warnings: ExtractionWarning[];
+}
+export interface ParsedSource<T = Record<string, unknown>> {
+  entities?: ParsedEntity[];
+  entityId?: string;
+  entityLabel?: string;
+  excluded?: boolean;
+  layoutVersion?: number;
+}

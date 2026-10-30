@@ -77,6 +77,7 @@ export type FieldSourceName =
   | "manual";
 
 export interface FieldSourceValue {
+  entityId?: string;
   logicalDocumentId?: string;
   sourceRevision?: string;
   originalKey?: string;
@@ -519,6 +520,16 @@ export interface InsuranceCase {
   factConfirmations?: Record<string, { confirmed: boolean; by?: string; at?: string }>;
   provenanceWarnings?: string[];
   case_id: string;
+  /** Server-owned BDZIP provenance for imported Auditor Cases. Ordinary local
+   * Cases have no submission_origin and must not fetch an imported worksheet. */
+  submission_origin?: {
+    package_id: string;
+    source_case_id: string;
+    revision: number;
+    broker_id: string;
+    broker_name: string;
+    submitted_at: string;
+  };
   case_type: CaseType;
   status: CaseStatus;
   validationStatus?: "NOT_STARTED" | "IN_PROGRESS" | "COMPLETE";
@@ -537,6 +548,18 @@ export interface InsuranceCase {
   premium: Premium;
   payment: Payment;
   policy_change?: PolicyChange;
+  /** Manual evidence-bound authorization; separate from new-business signed application. */
+  transaction_authorization?: import("./intake-profile.ts").ChangeAuthorization;
+  /** Manual comparison, bound to the exact signed application and Quote evidence. */
+  named_insured_comparison?: import("./intake-person-evidence.ts").InsuredNameComparison;
+  /** Server-verified evidence confirmations; an ordinary Case JSON save cannot forge these. */
+  intake_support_evidence?: import("./intake-support-evidence.ts").IntakeSupportProof[];
+  /** Server-authorized selected vehicle for policy-level OPCF 43 when multiple vehicles are rated. */
+  intake_opcf43_vehicle_target?: import("./intake-support-evidence.ts").Opcf43VehicleAssignment;
+  /** Explicitly reviewed discounts actually selected on the quote/policy. */
+  intake_discount_review?: import("./intake-support-evidence.ts").DiscountSelectionReview;
+  /** Manually confirmed quote/coverage facts needed to emit non-blocking yellow warnings. */
+  intake_warning_facts?: import("./intake-support-evidence.ts").IntakeWarningFacts;
   field_sources: FieldSource[];
   documents: CaseDocument[];
   alerts: Alert[];

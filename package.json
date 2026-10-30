@@ -14,7 +14,8 @@
     "local:full": "node scripts/run-local.mjs --full",
     "local:storage": "node local-server/server.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "broker:local": "node scripts/run-local.mjs --broker"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

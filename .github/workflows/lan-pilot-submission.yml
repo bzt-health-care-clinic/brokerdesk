@@ -1,0 +1,164 @@
+name: BrokerDesk LAN pilot submission integrity
+on:
+  push:
+    branches:
+      - feature/auditor-step4b
+      - feature/broker-step4a-ui
+      - feature/broker-review-step3e
+      - feature/broker-auditor-lan-pilot
+      - fix/step5b-acceptance-20261030
+  pull_request:
+    branches:
+      - main
+permissions:
+  contents: read
+jobs:
+  pilot:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject customer files and local data in checkout
+        run: |
+          foreach ($file in @('.env', '.env.local', 'brokerdesk.db', 'Cal - fee.xlsx')) {
+            if (Test-Path -LiteralPath $file) { throw "Sensitive local file is not allowed in CI" }
+          }
+          $packages = @(git ls-files '*.bdzip' '*.sqlite' '*.db')
+          if ($packages.Count -ne 0) { throw "Submission archives and databases must not be committed" }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked application dependencies
+        run: npm ci --include=dev --include=optional --no-audit --no-fund
+      - name: TypeScript
+        run: |
+          & .\node_modules\.bin\tsc.cmd --noEmit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Windows production build (Broker Review Step 2)
+        timeout-minutes: 8
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Server and package syntax
+        run: |
+          node --check local-server/bdzip.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check local-server/submission-service.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check local-server/server.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check tests/submission-pilot.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Broker Key-in review Step 1 standalone regressions
+        run: |
+          node --test tests/broker-keyin-review.test.mjs tests/remarks-generator.test.mjs tests/reviewed-keyin-package.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Broker Review Step 2 SQLite/source/API regressions
+        run: |
+          node --check local-server/broker-review-integration.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check local-server/broker-review-source.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test tests/broker-review-step2.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # STEP3B_CI: non-destructive reviewed Case projection.
+      - name: Broker reviewed Case projection
+        run: |
+          node --check local-server/reviewed-case-projection-stage3b.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test tests/broker-reviewed-case-projection-step3b.test.mjs tests/broker-reviewed-case-installer-step3b.test.mjs tests/broker-reviewed-case-compat-step3b.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # STEP3C_CI: synthetic repository + actual authoritative Intake evidence gates.
+      - name: Broker Step 3C VIN Licence Ownership and signed evidence
+        run: |
+          node --check tests/broker-step3c-identity-evidence.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test tests/broker-step3c-identity-evidence.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # STEP3D_CI: corrected VIN/Licence in actual Broker BDZIP and separate Auditor import.
+      - name: Broker Step 3D corrected identity BDZIP to Auditor
+        run: |
+          node --check tests/broker-step3d-vin-licence-bdzip.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test tests/broker-step3d-vin-licence-bdzip.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # STEP3E_CI: strict report facts, Coverage projection and byte-bound Ownership.
+      - name: Step 3E safe installer preflight and 24 focused regressions
+        run: |
+          node --check scripts/install-broker-review-step3e.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/install-broker-review-step3e.mjs --dry-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test tests/broker-review-step3e.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # STEP4A_CI: Broker MVR/DASH ordinary report forms only.
+      - name: Step 4A report editor installer and 20 focused regressions
+        run: |
+          node --check scripts/install-broker-review-step4a.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/install-broker-review-step4a.mjs --dry-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test tests/broker-review-step4a.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # STEP4B_CI: read-only Auditor structured key-in and guarded installer.
+      - name: Step 4B structured Auditor worksheet 26 targeted regressions
+        run: |
+          node --check lib/auditor-structured-sheet.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check scripts/install-auditor-step4b.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/install-auditor-step4b.mjs --dry-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test tests/auditor-step4b-structured.test.mjs tests/auditor-step4b-installer.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # STEP3_V04_CI: reviewed snapshot bridge, SQLite, and BDZIP checks.
+      - name: Broker reviewed v0.4 package and Auditor import
+        run: |
+          node --check local-server/reviewed-keyin-stage3.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check scripts/install-broker-review-step3.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test tests/broker-reviewed-bdzip-step3.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-transform-types tests/broker-reviewed-v04-e2e.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Geometric Applied, MVR and DASH parser regression (synthetic only)
+        run: |
+          node --experimental-transform-types tests/layout-parsers.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-transform-types tests/layout-boundary-safety.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-transform-types tests/signed-application-ocr.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Synthetic broker-auditor package and inbox E2E
+        run: |
+          node --experimental-transform-types tests/submission-pilot.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Document-backed tokenized insured names and OCR suggestion regressions
+        run: |
+          node --experimental-transform-types tests/intake-name-matching.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: v1.0 OPCF, discount and yellow warning evidence regressions
+        run: |
+          node --experimental-transform-types tests/intake-v1-support.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Broker file-intake and Auditor structured worksheet regressions
+        run: |
+          node --experimental-transform-types tests/auditor-role-split.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-transform-types tests/policy-change.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-transform-types tests/stability-batch2a.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Signed authorization and existing case completion regression
+        run: |
+          node --experimental-transform-types tests/signed-verification.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --experimental-transform-types tests/case-completion.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/signed-server-integrity.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

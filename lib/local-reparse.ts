@@ -2,6 +2,7 @@ import { isDriverReport, savedPageText, SECTION_ANALYSIS_VERSION } from "./repor
 import { PARSER_VERSION, parserFor, requiredParserVersion } from "./document-ingestion.ts";
 import { discoverLogicalSections, parseSections } from "./package-analysis.ts";
 import { sectionRevision } from "./active-evidence.ts";
+import { signedApplicationRegroupCandidate, isApplicationType } from "./signed-application-grouping.ts"; // STEP5B04_SIGNED_APPLICATION
 import type { LogicalDocument, ParsedSource, RawExtractedDocument, UploadedDocumentRecord } from "./extraction-types.ts";
 
 export function savedText(raw?: RawExtractedDocument) {
@@ -55,6 +56,7 @@ export async function reparseDocument(record: UploadedDocumentRecord, reportsOnl
   }
   const warnings = [...(next.parsed?.warnings ?? []), ...(next.parsedSources ?? []).flatMap(p => p.warnings)];
   if (next.suggestedSections?.some(s => isDriverReport(s.documentType) && s.suggestionStatus === "PENDING")) warnings.push({ code: "REPORT_BOUNDARY_REVIEW", severity: "medium", message: "Report boundaries need confirmation; proposed sections are not active evidence." });
+  if (next.suggestedSections?.some(s => isApplicationType(s.documentType) && s.suggestionStatus === "PENDING")) warnings.push({ code: "SIGNED_APPLICATION_BOUNDARY_REVIEW", severity: "medium", message: "Signed application contains fragmented, uncertain, or unreadable pages; regroup and review original before confirming." });
   if (next.withdrawnParsedSources?.some(s => s.corrections && Object.keys(s.corrections).length)) warnings.push({ code: "CORRECTION_SUPPORT_REVIEW", severity: "medium", message: "Corrections on withdrawn report sections are retained in history and require association review." });
   const incomplete = next.packagePages?.some(p => p.extractionStatus !== "COMPLETE" || !savedPageText(p).trim());
   next.state = warnings.length || incomplete ? "NEEDS_REVIEW" : "PARSED";
@@ -65,9 +67,17 @@ export async function reparseDocument(record: UploadedDocumentRecord, reportsOnl
 }
 export async function refreshParserVersion(record: UploadedDocumentRecord) {
   const sourceChanged = Boolean(record.sourceHash && record.currentSourceHash && record.sourceHash !== record.currentSourceHash);
+  // Do not invalidate non-text supporting documents solely because no OCR text exists.
+  // Changed physical source hashes must still fail closed.
+  if(!sourceChanged && !hasReusableText(record)) {
+    // Non-text proof photos can remain valid. A stale structured answer with no reusable
+    // source text cannot: keep the original file but withdraw its parsed facts.
+    if(record.parsed || record.parsedSources?.length)return reparseDocument(record);
+    return record;
+  }
   const reports = [record.documentType, ...(record.packagePages ?? []).map(p => p.classification.documentType)].some(isDriverReport);
   const boundariesChanged = reports && record.packagePages?.length && record.sectionAnalysisVersion !== SECTION_ANALYSIS_VERSION;
-  return (record.parserVersion ?? 0) < requiredParserVersion(record) || boundariesChanged || sourceChanged ? reparseDocument(record, !sourceChanged && (record.parserVersion ?? 0) >= 3 && reports) : record;
+  return (record.parserVersion ?? 0) < requiredParserVersion(record) || boundariesChanged || sourceChanged ? reparseDocument(record, !sourceChanged && (record.parserVersion ?? 0) >= requiredParserVersion(record) && reports) : record;
 }
 /** Metadata changes only: no extractor/transport is accepted by this function. */
 export async function updateLogicalSections(record: UploadedDocumentRecord, sections: LogicalDocument[]): Promise<UploadedDocumentRecord> {
@@ -91,3 +101,40 @@ export async function updateLogicalSections(record: UploadedDocumentRecord, sect
   return next;
 }
 
+
+/**
+ * STEP5B04_SIGNED_APPLICATION: explicit migration of older automatically fragmented application
+ * sections. Never migrate user-manual sections, withdrawn evidence or old
+ * confirmations. Old parsed values/corrections are archived, then the new
+ * single physical range is reparsed from locally saved page text.
+ */
+export async function regroupSignedApplication(record: UploadedDocumentRecord): Promise<UploadedDocumentRecord> {
+  const proposed=signedApplicationRegroupCandidate(record);
+  if(!proposed)throw new Error("Cannot safely regroup: verify original cover, resolve OCR failures or manual section conflicts first.");
+  const oldIds=new Set((record.logicalDocuments??[])
+    .filter(s=>isApplicationType(s.documentType)).map(s=>s.id));
+  const existing=(record.logicalDocuments??[]).filter(s=>!oldIds.has(s.id));
+  if(existing.some(s=>s.presenceStatus==="FOUND" && (s.startPage??1)<=proposed.endPage! &&
+      (s.endPage??s.startPage??1)>=proposed.startPage!))
+    throw new Error("An independent document overlaps the proposed application pages.");
+  const sources=[...(record.parsedSources??[]),...(record.parsed?[record.parsed]:[])];
+  // A legacy unbound application parse is also stale after regroup. Otherwise
+  // one-section fallback could accidentally revive facts from the old range.
+  const staleSource=(source:typeof sources[number])=>
+    Boolean(source.logicalDocumentId && oldIds.has(source.logicalDocumentId)) ||
+    (!source.logicalDocumentId && isApplicationType(source.documentType));
+  const withdrawn=sources.filter(staleSource);
+  const updated:UploadedDocumentRecord={
+    ...record,
+    logicalDocuments:[...existing,proposed],
+    suggestedSections:[...(record.suggestedSections??[])
+      .filter(s=>!isApplicationType(s.documentType)),proposed],
+    parsed:undefined,
+    parsedSources:sources.filter(s=>!staleSource(s)),
+    withdrawnParsedSources:[...(record.withdrawnParsedSources??[]),...withdrawn],
+    state:"NEEDS_REVIEW",
+  };
+  // The old section ID/range is deliberately gone: any signed/name comparison
+  // fingerprint referencing it fails the existing intake evidence gate.
+  return reparseDocument(updated);
+}
