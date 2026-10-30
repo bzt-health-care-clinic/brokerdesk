@@ -52,10 +52,10 @@ export async function createRuntime() {
   const base = resolve(root, 'tests/.acceptance-runs'); await mkdir(base, { recursive: true });
   const run = await mkdtemp(resolve(base, 'ae-'));
   const artifacts = resolve(run, 'artifacts'); await mkdir(artifacts);
-  const calls = []; const logs = {}; const processes = [];
+  const calls = []; const cloudCalls = []; const logs = {}; const processes = [];
   let apiProcess; let data; let failNext = false;
   const stub = createServer(async (req, res) => {
-    const call = { mode: 'STUBBED_OCR', name: '', bytes: 0, width: 0, height: 0, status: 0 }; calls.push(call);
+    const call = { mode: 'LEGACY_CLOUD_STUB', name: '', bytes: 0, width: 0, height: 0, status: 0 }; cloudCalls.push(call);
     try {
       assert.equal(req.method, 'POST'); assert.equal(req.url, '/parse/image');
       const chunks = []; for await (const c of req) chunks.push(c);
@@ -75,6 +75,64 @@ export async function createRuntime() {
     } catch (e) { call.status = 502; call.error = e.message; res.writeHead(502); res.end('Synthetic provider failure'); }
   });
   await new Promise(r => stub.listen(47842, '127.0.0.1', r));
+  // The app now uses a local-only OCR transport. Browser-test route interception
+  // emulates that loopback boundary without installing Tesseract in CI. It does
+  // NOT measure real Tesseract accuracy or exercise the local-server OCR handler.
+  async function handleLocalOcr(route) {
+    const request = route.request();
+    const url = new URL(request.url());
+    assert.equal(url.origin, backend);
+    if (url.pathname === '/local-ocr/health' && request.method() === 'GET') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        state: 'ONLINE', provider: 'local_tesseract', mode: 'LOCAL_ONLY',
+        version: '5.0.0-SYNTHETIC-STUB', modelLoaded: true, language: 'eng',
+        maxFileBytes: 8388608, maxConcurrentJobs: 1
+      }) });
+      return;
+    }
+    const call = { mode: 'STUBBED_LOCAL_OCR', name: '', bytes: 0, width: 0, height: 0, status: 0 };
+    calls.push(call);
+    try {
+      assert.equal(request.method(), 'POST');
+      assert.equal(url.pathname, '/local-ocr');
+      const form = await new Request(request.url(), {
+        method: 'POST',
+        headers: { 'content-type': request.headers()['content-type'] },
+        body: request.postDataBuffer()
+      }).formData();
+      const file = form.get('file');
+      assert(file instanceof File, 'Local OCR must receive a real rendered image File');
+      call.name = file.name; call.bytes = file.size;
+      assert.match(file.name, /^(02_ownership_scan(?:-page-1)?\.(?:jpg|png)|05_mixed_auto_package-page-4\.jpg)$/);
+      const bytes = Buffer.from(await file.arrayBuffer());
+      [call.width, call.height] = dimensions(bytes);
+      if (file.name.endsWith('.png')) assert.equal(sha(bytes),
+        expected.fixtures.find(f => f.file.endsWith('02_ownership_scan.png')).sha256);
+      if (failNext) {
+        failNext = false; call.expectedFailure = true;
+        throw new Error('Declared synthetic local OCR failure');
+      }
+      const sx = call.width / ground.page_width, sy = call.height / ground.page_height;
+      const blocks = ground.blocks.map(b => {
+        const [x1,y1,x2,y2] = b.bbox_pdf_points;
+        return { text:b.text, confidence:.99,
+          boundingBox:{ x:x1*sx, y:y1*sy, width:(x2-x1)*sx, height:(y2-y1)*sy } };
+      });
+      call.status = 200;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        text:ground.text, rawText:ground.text, normalizedText:ground.text,
+        confidence:.99,
+        pages:[{ page:1, pageNumber:1, text:ground.text, confidence:.99,
+          blocks, width:call.width, height:call.height }],
+        metadata:{ provider:'local_tesseract', mode:'LOCAL_ONLY', requestSucceeded:true,
+          requiresBrokerVerification:true, geometryOrientationVerified:false }
+      }) });
+    } catch (error) {
+      call.status = 502; call.error = error.message;
+      await route.fulfill({ status: 502, contentType:'application/json',
+        body: JSON.stringify({ error:'Synthetic local OCR failure',code:'OCR_LOCAL_PROCESS_FAILED' }) });
+    }
+  }
   // Whitelisted child environment: no inherited OCR/API secrets or customer paths.
   const env = Object.fromEntries(['PATH','Path','SystemRoot','WINDIR','TEMP','TMP','COMSPEC','PATHEXT','USERPROFILE','HOME','APPDATA','LOCALAPPDATA'].filter(k => process.env[k]).map(k => [k, process.env[k]]));
   Object.assign(env, { BROKERDESK_LOCAL_API_PORT: '47841', BROKERDESK_LOCAL_FRONTEND_ORIGIN: frontend, NEXT_PUBLIC_BROKERDESK_LOCAL_API_URL: backend, BROKERDESK_FAST_LOCAL: 'true', OCRSPACE_API_KEY: 'synthetic-test-token-not-a-real-key', OCRSPACE_API_URL: 'http://127.0.0.1:47842/parse/image', OCRSPACE_MAX_FILE_BYTES: '1048576', OCRSPACE_MAX_PDF_PAGES: '3', OCRSPACE_TIMEOUT_MS: '5000', NEXT_TELEMETRY_DISABLED: '1' });
@@ -94,7 +152,7 @@ export async function createRuntime() {
     await waitReady(backend + '/health', apiProcess); return apiProcess.pid;
   }
   return {
-    run, artifacts, calls, get data() { return data; },
+    run, artifacts, calls, cloudCalls, handleLocalOcr, get data() { return data; },
     failProviderOnce() { failNext = true; },
     async start() { const front = launch('frontend', ['scripts/run-framework.mjs','dev','--port','5183','--hostname','127.0.0.1']); await waitReady(frontend, front); },
     async reset(name) { await stop(apiProcess); data = resolve(run, `data-${name}`); await startBackend(); assert.deepEqual(await api('/cases'), []); },

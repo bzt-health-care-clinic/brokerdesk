@@ -23,6 +23,8 @@ async function persist() {
   report.stubbedOcrCalls = rt?.calls.length ?? 0;
   report.STUBBED_OCR = report.stubbedOcrCalls ? 'EXECUTED_TEST_BOUNDARY_ONLY' : 'NOT_RUN';
   report.ocrRequests = rt?.calls ?? [];
+  report.legacyCloudRequests = rt?.cloudCalls ?? [];
+  report.legacyCloudCallCount = rt?.cloudCalls.length ?? 0;
   await writeFile(resolve(output, 'results.json'), JSON.stringify(report, null, 2));
   const body = `# BrokerDesk A–E acceptance\n\n${report.status}\n\nOS: ${report.runnerOS}\n\nBROWSER_EXECUTED: ${report.BROWSER_EXECUTED}; STUBBED_OCR: ${report.STUBBED_OCR}; LIVE_OCR: NOT_RUN (0 requests).\n\n${report.scenarios.map(s => `- ${s.id} ${s.name}: ${s.status}\n${s.checks.map(c => `  - ${c.status}: ${c.name}${c.error ? ` — ${c.error}` : ''}`).join('\n')}`).join('\n')}\n\nSynthetic fixtures only. Backend process restarts are not OS restarts. DOM drop is not Windows Explorer drag validation. Unsupported extraction is reported separately from workflow checks. No real-client accuracy claim.\n`;
   await writeFile(resolve(output, 'browser-test-report.md'), body);
@@ -59,13 +61,16 @@ try {
         await rt.reset(scenario.id);
         context = await browser.newContext({ viewport: { width:1440,height:1000 }, serviceWorkers: 'block' });
         await context.route('**/*', route => { const url = new URL(route.request().url()); return [frontend,backend].includes(url.origin) ? route.continue() : route.abort('blockedbyclient'); });
+        // More-specific Playwright route has precedence over the loopback guard.
+        // Only the synthetic OCR transport is intercepted; UI and storage stay real.
+        await context.route('**/local-ocr**', route => rt.handleLocalOcr(route));
         await context.tracing.start({ screenshots:true, snapshots:true, sources:false }); tracingStarted = true;
         page = await context.newPage(); page.setDefaultTimeout(12000); page.setDefaultNavigationTimeout(60000);
         page.on('worker', worker => scenario.workers.push(worker.url()));
         page.on('pageerror', e => scenario.errors.push({ kind:'pageerror', message:e.message }));
         page.on('console', m => { if (m.type() === 'error') scenario.errors.push({ kind:'console', message:m.text() }); });
         page.on('requestfailed', r => scenario.failedRequests.push({ url:r.url(), reason:r.failure()?.errorText }));
-        page.on('response', r => { if (r.status() >= 400) scenario.failedRequests.push({ url:r.url(), status:r.status(), expectedProviderFailure: scenario.id === 'C' && r.url() === `${backend}/ocr-space` && rt.calls.at(-1)?.expectedFailure === true }); });
+        page.on('response', r => { if (r.status() >= 400) scenario.failedRequests.push({ url:r.url(), status:r.status(), expectedProviderFailure: scenario.id === 'C' && r.url() === `${backend}/local-ocr` && rt.calls.at(-1)?.expectedFailure === true }); });
         await runScenario(scenario.id, page, rt, scenario);
       }
       catch (e) { scenario.checks.push({ name:'Scenario setup/continuation', status:'FAILED', error:e.stack }); }
@@ -73,6 +78,7 @@ try {
         const unexpected = scenario.failedRequests.filter(r => !r.expectedProviderFailure);
         const unexpectedErrors = scenario.errors.filter(e => !(scenario.id === 'C' && rt.calls.some(c => c.expectedFailure) && /^Failed to load resource: the server responded with a status of 502/.test(e.message)));
         scenario.checks.push({ name:'No unhandled scripts, worker failures or unexpected failed requests', status: unexpectedErrors.length || unexpected.length ? 'FAILED' : 'PASS' });
+        scenario.checks.push({ name:'No legacy cloud OCR requests', status: rt.cloudCalls.length ? 'FAILED' : 'PASS' });
         scenario.status = scenario.checks.some(c => c.status !== 'PASS') ? 'FAILED' : 'ACTUAL_BROWSER_PASS';
         await persist();
         if (page) await page.screenshot({ path:resolve(output, `${scenario.id}-final.png`), fullPage:true }).catch(e => { scenario.checks.push({ name:'Final screenshot', status:'FAILED', error:e.message }); scenario.status='FAILED'; });
