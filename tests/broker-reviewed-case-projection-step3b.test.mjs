@@ -171,3 +171,31 @@ test("non-Pembridge Remarks longer than 500 chars are preserved in the projected
   assert.deepEqual(out.issues,[]);
   assert.equal(out.item.policy_change.notes,value);
 });
+
+// Step 5B-01 / Windows Node 24 regression: Policy Change quote number is optional.
+test("optional blank Policy Change Quote Number is not projected as required text",()=>{
+  const data=caseData();data.case_type="auto_policy_change";
+  const r=review(data,{"policy.quoteNumber":"   "});
+  r.fields[0].required=false;
+  const out=result(data,r);
+  assert.deepEqual(out.issues,[]);
+  assert.equal(out.item.policy.quote_number,undefined);
+  assert.equal(data.policy.quote_number,undefined);
+});
+test("required blank Quote Number still fails strict projection",()=>{
+  const data=caseData();
+  const r=review(data,{"policy.quoteNumber":" "});
+  r.fields[0].required=true;
+  const out=result(data,r);
+  assert.match(out.issues.join(" "),/expected non-empty text/);
+});
+test("optional nonblank invalid Quote Number fails, valid one is projected",()=>{
+  const data=caseData();data.case_type="auto_policy_change";
+  const r=review(data,{"policy.quoteNumber":7});
+  r.fields[0].required=false;
+  assert.match(result(data,r).issues.join(" "),/expected non-empty text/);
+  r.fields[0].value="QTEST1234";
+  const out=result(data,r);
+  assert.deepEqual(out.issues,[]);
+  assert.equal(out.item.policy.quote_number,"QTEST1234");
+});

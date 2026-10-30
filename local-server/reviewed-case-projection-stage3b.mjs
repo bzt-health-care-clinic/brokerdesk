@@ -140,10 +140,15 @@ export function projectBrokerReviewedCase(item,review){
     const dest=projected[parent]??(projected[parent]={});
     apply(dest,key,fieldId,convert);
   }
-  // Step 5B-01: the reviewed Quote # must agree with the outbound Case.
-  // Only project a real reviewed value; optional Policy Change blanks stay blank.
-  if(fields.get("policy.quoteNumber") !== null &&
-     fields.get("policy.quoteNumber") !== undefined) {
+  // Step 5B-01: project a reviewed Quote # without fabricating a value.
+  // A Policy Change Quote # may be optional and blank. Required blanks and
+  // nonblank invalid values must still fail the existing strict converter.
+  const quoteField=(review.fields??[]).find(field=>field.id==="policy.quoteNumber");
+  const optionalBlankQuote=quoteField?.required===false &&
+    (quoteField.value===null || quoteField.value===undefined ||
+     (typeof quoteField.value==="string" && !quoteField.value.trim()));
+  if(quoteField && !optionalBlankQuote &&
+     quoteField.value !== null && quoteField.value !== undefined) {
     const policy=projected.policy??(projected.policy={});
     apply(policy,"quote_number","policy.quoteNumber",requiredString);
     if(Object.prototype.hasOwnProperty.call(policy,"auto_quote_number"))

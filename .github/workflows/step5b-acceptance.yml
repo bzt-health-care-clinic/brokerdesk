@@ -60,7 +60,8 @@ jobs:
           $files = @(Get-ChildItem -LiteralPath 'tests' -Filter 'step5b*.test.mjs' -File | Sort-Object Name | ForEach-Object { $_.FullName })
           Write-Host "Step 5B test files: $($files.Count)"
           if ($files.Count -ne 19) { throw 'Expected all 19 Step 5B test files; do not silently skip tests.' }
-          & node --test @files
+          # document-ingestion.ts uses TS parameter properties; Node 24's default strip-only mode is insufficient.
+          & node --experimental-transform-types --test @files
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   original-layout:
