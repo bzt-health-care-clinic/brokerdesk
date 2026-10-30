@@ -1,0 +1,48 @@
+name: BrokerDesk Step 5A privacy-safe real-sample measurement harness
+
+on:
+  push:
+    branches:
+      - feature/step5a-real-sample-measurement
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measurement:
+    name: Windows Node 24 synthetic harness, TypeScript and build
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject raw client data and local measurement manifests
+        run: |
+          $blocked = @(git ls-files '*.bdzip' '*.sqlite' '*.db' '.env*' 'step5a-private/**' 'private-step5a/**')
+          if ($blocked.Count -gt 0) { throw "Private customer or offline input files are tracked: $($blocked.Count)" }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --include=dev --include=optional --no-audit --no-fund
+      - name: Synthetic-only Step 5A measurement tests
+        run: |
+          node --version
+          node --test tests/step5a-real-coverage.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Existing Step 5B-08 field parity regressions
+        run: |
+          node --experimental-transform-types --test tests/step5b08-coverage.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: TypeScript
+        run: |
+          & .\node_modules\.bin\tsc.cmd --noEmit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Production build
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
