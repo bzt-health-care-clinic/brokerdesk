@@ -7,7 +7,7 @@ export interface ExtractionInput { fileId: string; fileName: string; mimeType: s
 export interface BoundingBox { x: number; y: number; width: number; height: number; }
 export interface ExtractedBlock { text: string; confidence?: number; boundingBox?: BoundingBox; }
 export interface ExtractedPage { page: number; pageNumber?: number; text?: string; confidence?: number; width?: number; height?: number; rotation?: 0 | 90 | 180 | 270; blocks?: ExtractedBlock[]; }
-export interface PackagePage extends ExtractedPage { ocrGeometryVerified?: boolean; extractionProvider: "embedded_pdf_text" | "ocr_space" | "paddle_ocr" | "none"; extractionStatus: "COMPLETE" | "FAILED"; classification: ClassificationResult; sourceHash: string; error?: string; }
+export interface PackagePage extends ExtractedPage { ocrGeometryVerified?: boolean; extractionProvider: "embedded_pdf_text" | "ocr_space" | "paddle_ocr" | "local_tesseract" | "none"; extractionStatus: "COMPLETE" | "FAILED"; /** Step 5B-03, supplementary page diagnostic; legacy status preserved */ pageOcrStatus?: import("./pdf-page-ocr-status.ts").PageOcrStatus; classification: ClassificationResult; sourceHash: string; error?: string; }
 export interface RawExtractedDocument { text?: string; rawText?: string; normalizedText?: string; pages?: ExtractedPage[]; metadata?: Record<string, unknown>; confidence?: number; }
 export interface FieldEvidence { page?: number; text?: string; boundingBox?: BoundingBox; confidence?: number; provider?: string; physicalFileName?: string; }
 export interface ExtractionWarning { code: string; message: string; field?: string; severity: "high" | "medium" | "info"; }

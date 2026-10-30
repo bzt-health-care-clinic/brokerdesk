@@ -7,14 +7,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { applyManualCorrection, BrowserFileStore, classifyDocument, ingestFiles, LocalTextProvider, reprocessDocument } from "@/lib/document-ingestion";
 import { DocumentType, LogicalDocument, UploadedDocumentRecord } from "@/lib/extraction-types";
 import { DocumentRepository } from "@/lib/local-repositories";
-import { EmbeddedPdfTextProvider, HttpOcrSpaceTransport, HttpPaddleOcrTransport, OcrServerHealth, OcrSpaceProvider, OptionalAzureDocumentProvider, PaddleOcrProvider, RoutingDocumentExtractor } from "@/lib/ocr-providers";
+import { EmbeddedPdfTextProvider, OcrServerHealth, RoutingDocumentExtractor } from "@/lib/ocr-providers";
 import { getCanonicalInstitution, InstitutionRole } from "@/lib/institution-directory";
 import { DOCUMENT_UPLOAD_ACCEPT, openDocumentPicker } from "@/lib/file-picker";
 import { suggestDocumentFilename } from "@/lib/document-filenames";
 import { acceptedDroppedFiles } from "@/lib/document-drop";
 import { analyzePdfPackage, getBrowserPdfAdapter, packageFailureRecord } from "@/lib/package-analysis";
-import { hasReusableText, reparseDocument, updateLogicalSections } from "@/lib/local-reparse";
+import { hasReusableText, reparseDocument, updateLogicalSections, regroupSignedApplication } from "@/lib/local-reparse"; // STEP5B04_SIGNED_APPLICATION
 import { documentOcrUi } from "@/lib/document-ocr-ui";
+import { buildDocumentDiagnostics } from "@/lib/step5b05-diagnostics";
+import { HttpLocalTesseractTransport, LocalTesseractProvider } from "@/lib/local-ocr-transport";
+import { PAGE_OCR_LABELS, pageStatus, reusablePage } from "@/lib/pdf-page-ocr-status"; // Step 5B-03
 
 const LOCAL_UPLOAD_LIMIT_BYTES = 50 * 1024 * 1024;
 
@@ -37,10 +40,12 @@ function canonicalFor(record: UploadedDocumentRecord) {
 
 export function IngestionPanel({ caseId, insuredName, records, repository, onChange, onAudit, inputRef, subjects = [] }: { subjects?: { id: string; type: string; label: string }[]; caseId: string; insuredName?: string; records: UploadedDocumentRecord[]; repository: DocumentRepository; onChange: (records: UploadedDocumentRecord[]) => void; onAudit?: (action: string, documentId?: string) => void; inputRef?: RefObject<HTMLInputElement | null> }) {
   const store = useMemo(() => new BrowserFileStore(), []);
-  const ocrTransport = useMemo(() => new HttpPaddleOcrTransport(), []);
-  const cloudTransport = useMemo(() => new HttpOcrSpaceTransport(), []);
-  const cloudProvider = useMemo(() => new OcrSpaceProvider(store, cloudTransport), [store, cloudTransport]);
-  const extractor = useMemo(() => new RoutingDocumentExtractor([new LocalTextProvider(store), new EmbeddedPdfTextProvider(store), cloudProvider, new PaddleOcrProvider(store, ocrTransport), new OptionalAzureDocumentProvider()]), [store, cloudProvider, ocrTransport]);
+  // Step 5B-03: local Tesseract only; existing cloud routes are not called.
+  const localTransport=useMemo(()=>new HttpLocalTesseractTransport(),[]);
+  const extractor=useMemo(()=>new RoutingDocumentExtractor([
+    new LocalTextProvider(store),new EmbeddedPdfTextProvider(store),
+    new LocalTesseractProvider(store,localTransport)
+  ]),[store,localTransport]);
   const internalInputRef = useRef<HTMLInputElement>(null);
   const pickerRef = inputRef ?? internalInputRef;
   const [busy, setBusy] = useState(false);
@@ -50,7 +55,7 @@ export function IngestionPanel({ caseId, insuredName, records, repository, onCha
   const [ocrProcessingId, setOcrProcessingId] = useState<string | null>(null);
   const [autoOcr, setAutoOcr] = useState(true);
 
-  useEffect(() => { const timer = window.setTimeout(() => { void cloudTransport.health().then(setOcrHealth).catch(() => setOcrHealth({ state: "OFFLINE" })); }, 250); return () => window.clearTimeout(timer); }, [cloudTransport]);
+  useEffect(() => { const timer = window.setTimeout(() => { void localTransport.health().then(setOcrHealth).catch(() => setOcrHealth({ state: "OFFLINE" })); }, 250); return () => window.clearTimeout(timer); }, [localTransport]);
   useEffect(() => { setAutoOcr(window.localStorage.getItem("brokerdesk.autoOcrOnUpload") !== "false"); }, []);
   useEffect(() => {
     const preventFileNavigation = (event: DragEvent) => { if (event.dataTransfer?.types.includes("Files")) event.preventDefault(); };
@@ -72,8 +77,8 @@ export function IngestionPanel({ caseId, insuredName, records, repository, onCha
     setBusy(true);
     let currentHealth = ocrHealth;
     try {
-      if (autoOcr) { try { currentHealth = await cloudTransport.health(); } catch { currentHealth = { state: "OFFLINE" }; } setOcrHealth(currentHealth); }
-      cloudProvider.setAutoEnabled(autoOcr && currentHealth.state === "ONLINE");
+      if (autoOcr) { try { currentHealth = await localTransport.health(); } catch { currentHealth = { state: "OFFLINE" }; } setOcrHealth(currentHealth); }
+      // Local OCR is used only for unreadable pages; no cloud fallback.
       const added: UploadedDocumentRecord[] = [];
       for (const file of sourceFiles) {
         if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) { const id = crypto.randomUUID(); store.register(id, file); const classification = classifyDocument(file.name, file.type); added.push({ id, fileName: file.name, mimeType: file.type || "application/pdf", size: file.size, documentType: classification.documentType, classification, state: "UPLOADED", logicalDocuments: [], packageProgress: { status: "NOT_STARTED", processed: 0, total: 0, embedded: 0, ocr: 0, failed: 0, updatedAt: new Date().toISOString() } }); }
@@ -85,26 +90,36 @@ export function IngestionPanel({ caseId, insuredName, records, repository, onCha
       if (failedUploads.length) window.alert(`Could not save: ${failedUploads.join(", ")}. Other files in this batch were kept.`);
       let combined = [...records, ...savedEntries.map((entry) => entry.record)]; onChange(combined);
       for (const entry of savedEntries) if (entry.record.mimeType === "application/pdf" || /\.pdf$/i.test(entry.record.fileName)) {
-        try { const pdfAdapter = await getBrowserPdfAdapter(); const updated = await analyzePdfPackage(entry.record, entry.file, pdfAdapter, { extract: async (page) => { if (!autoOcr || currentHealth.state !== "ONLINE") throw new Error("OCR.Space is unavailable; embedded pages remain usable and scanned pages can be retried."); return cloudTransport.extract(page, { pageCount: 1 }); } }, { maxOcrBytes: currentHealth.maxFileBytes ?? 1024 * 1024, concurrency: Number(window.localStorage.getItem("brokerdesk.packageOcrConcurrency") || 1), onProgress: async (progress) => { const persisted = await repository.update(progress); combined = combined.map((item) => item.id === persisted.id ? persisted : item); onChange([...combined]); } }); combined = combined.map((item) => item.id === updated.id ? updated : item); onChange([...combined]); }
+        try { const pdfAdapter = await getBrowserPdfAdapter(); const updated = await analyzePdfPackage(entry.record, entry.file, pdfAdapter, { extract: async (page) => { if (!autoOcr || currentHealth.state !== "ONLINE") throw Object.assign(new Error("Local OCR is not configured or offline."),{code:"OCR_NOT_CONFIGURED"}); return localTransport.extract(page); } }, { maxOcrBytes: currentHealth.maxFileBytes ?? 1024 * 1024, concurrency: Number(window.localStorage.getItem("brokerdesk.packageOcrConcurrency") || 1), onProgress: async (progress) => { const persisted = await repository.update(progress); combined = combined.map((item) => item.id === persisted.id ? persisted : item); onChange([...combined]); } }); combined = combined.map((item) => item.id === updated.id ? updated : item); onChange([...combined]); }
         catch (error) { const failed = await persistPackageFailure(entry.record, error, combined); combined = combined.map((item) => item.id === failed.id ? failed : item); }
       }
     } finally {
-      cloudProvider.setAutoEnabled(false);
+      // No external OCR provider is enabled.
       setBusy(false);
       if (pickerRef.current) pickerRef.current.value = "";
     }
   }
 
+  async function regroupApplication(record: UploadedDocumentRecord) {
+    if(!window.confirm("Regroup this signed application into one physical section? Old signed/name confirmations will need to be repeated. Confirm only after reviewing source pages."))return;
+    try{
+      const updated=await regroupSignedApplication(record);
+      const saved=await repository.update(updated);
+      onChange(records.map(item=>item.id===record.id?saved:item));
+      onAudit?.("SIGNED_APPLICATION_REGROUP",record.id);
+      window.alert("Application regrouped. Reconfirm names and signatures against the full original source before submitting.");
+    }catch(error){window.alert(error instanceof Error?error.message:"Cannot regroup this source safely.");}
+  }
   async function reprocess(record: UploadedDocumentRecord) {
     const updated = await reparseDocument(record);
     await repository.update(updated);
     onChange(records.map((item) => item.id === record.id ? updated : item));
   }
-  async function runCloudOcr(record: UploadedDocumentRecord, force = false) {
-    if (!force && hasReusableText(record) && !record.packagePages?.some(p => p.extractionStatus !== "COMPLETE" || !p.text?.trim())) { await reprocess(record); return; }
-    if (ocrHealth.state === "NOT_CONFIGURED") { window.alert("OCR.Space is not configured. Configure it on the local server and restart BrokerDesk."); return; }
-if (record.mimeType === "application/pdf" || /\.pdf$/i.test(record.fileName)) { setOcrProcessingId(record.id); try { if (force || record.sourceHash !== record.currentSourceHash || !store.get(record.id)) store.register(record.id, await repository.fetchFile(record)); const file = store.get(record.id)!; const pdfAdapter = await getBrowserPdfAdapter(); const updated = await analyzePdfPackage(record, file, pdfAdapter, cloudTransport, { maxOcrBytes: ocrHealth.maxFileBytes ?? 1024 * 1024, concurrency: Number(window.localStorage.getItem("brokerdesk.packageOcrConcurrency") || 1), force, onProgress: async (progress) => { const persisted = await repository.update(progress); onChange(records.map((item) => item.id === record.id ? persisted : item)); } }); const persisted = await repository.update(updated); onChange(records.map((item) => item.id === record.id ? persisted : item)); } catch (error) { await persistPackageFailure(record, error); } finally { setOcrProcessingId(null); } return; }
-    const section = record.logicalDocuments?.find((item) => item.presenceStatus === "FOUND"); cloudProvider.enableOnce(record.id, { pageCount: record.pageCount, startPage: section?.startPage, endPage: section?.endPage }); setOcrProcessingId(record.id);
+  async function runLocalOcr(record: UploadedDocumentRecord, force = false) {
+    if (!force && hasReusableText(record) && !record.packagePages?.some(p => !reusablePage(p))) { await reprocess(record); return; }
+    if (ocrHealth.state !== "ONLINE") { window.alert("Local Tesseract OCR is not available. Install Tesseract 5 and restart BrokerDesk."); return; }
+if (record.mimeType === "application/pdf" || /\.pdf$/i.test(record.fileName)) { setOcrProcessingId(record.id); try { if (force || record.sourceHash !== record.currentSourceHash || !store.get(record.id)) store.register(record.id, await repository.fetchFile(record)); const file = store.get(record.id)!; const pdfAdapter = await getBrowserPdfAdapter(); const updated = await analyzePdfPackage(record, file, pdfAdapter, localTransport, { maxOcrBytes: ocrHealth.maxFileBytes ?? 1024 * 1024, concurrency: Number(window.localStorage.getItem("brokerdesk.packageOcrConcurrency") || 1), force, onProgress: async (progress) => { const persisted = await repository.update(progress); onChange(records.map((item) => item.id === record.id ? persisted : item)); } }); const persisted = await repository.update(updated); onChange(records.map((item) => item.id === record.id ? persisted : item)); } catch (error) { await persistPackageFailure(record, error); } finally { setOcrProcessingId(null); } return; }
+    setOcrProcessingId(record.id);
     try {
       const file = await repository.fetchFile(record); store.register(record.id, file);
       const sourceHash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer())), b => b.toString(16).padStart(2, "0")).join("");
@@ -180,7 +195,7 @@ if (record.mimeType === "application/pdf" || /\.pdf$/i.test(record.fileName)) { 
   }
 
   return <div className="ingestion-block">
-    <div className={`ocr-health state-${ocrHealth.state.toLowerCase()}`} role="status" aria-live="polite"><span className="ocr-health-dot" /><div><strong>OCR.Space · {label(ocrHealth.state)}</strong><small>{ocrHealth.state === "ONLINE" ? "Cloud Test Provider · 1 MB / 3 pages default" : ocrHealth.state === "NOT_CONFIGURED" ? "Configure OCR.Space on the local server to enable test OCR" : "Manual review remains available"}</small></div><label className="auto-ocr-toggle"><input type="checkbox" checked={autoOcr} onChange={(event) => { setAutoOcr(event.target.checked); window.localStorage.setItem("brokerdesk.autoOcrOnUpload", String(event.target.checked)); }} /> Auto OCR on upload</label><Button variant="outline" size="sm" type="button" onClick={() => void cloudTransport.health().then(setOcrHealth).catch(() => setOcrHealth({ state: "OFFLINE" }))}>Check</Button></div>
+    <div className={`ocr-health state-${ocrHealth.state.toLowerCase()}`} role="status" aria-live="polite"><span className="ocr-health-dot" /><div><strong>Local Tesseract OCR · {label(ocrHealth.state)}</strong><small>{ocrHealth.state === "ONLINE" ? "Local CPU · scanned pages only · no cloud upload" : ocrHealth.state === "NOT_CONFIGURED" ? "Install Tesseract 5 on this Windows PC" : "Manual review remains available"}</small></div><label className="auto-ocr-toggle"><input type="checkbox" checked={autoOcr} onChange={(event) => { setAutoOcr(event.target.checked); window.localStorage.setItem("brokerdesk.autoOcrOnUpload", String(event.target.checked)); }} /> Auto OCR on upload</label><Button variant="outline" size="sm" type="button" onClick={() => void localTransport.health().then(setOcrHealth).catch(() => setOcrHealth({ state: "OFFLINE" }))}>Check</Button></div>
     <input ref={pickerRef} className="sr-only" type="file" multiple accept={DOCUMENT_UPLOAD_ACCEPT} onChange={(event) => upload(event.target.files)} />
     <div className={`upload-zone active-upload${dragOver ? " is-drag-over" : ""}`} onClick={() => !busy && openDocumentPicker(pickerRef.current)} role="button" tabIndex={busy ? -1 : 0} aria-busy={busy} aria-disabled={busy} onKeyDown={(event) => { if (!busy && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); openDocumentPicker(pickerRef.current); } }} onDragEnter={(event) => { event.preventDefault(); event.stopPropagation(); dragDepth.current += 1; setDragOver(true); }} onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); if (event.dataTransfer) event.dataTransfer.dropEffect = "copy"; }} onDragLeave={(event) => { event.preventDefault(); event.stopPropagation(); dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setDragOver(false); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); dragDepth.current = 0; setDragOver(false); if (!busy) void upload(acceptedDroppedFiles(event.dataTransfer.files)); }}>
       <Upload /><strong>{busy ? "Processing files…" : "Drop or choose files"}</strong><span>PDF, image, text · batch upload · 50 MB maximum per file</span><span className="upload-cta" aria-hidden="true">Choose files</span>
@@ -193,13 +208,25 @@ if (record.mimeType === "application/pdf" || /\.pdf$/i.test(record.fileName)) { 
         <p className="classification-reason">{record.classification.reason}</p>
         <p className="extraction-summary">{ocrUi.summary}</p>
         {record.packageProgress && record.packageProgress.status !== "NOT_STARTED" && <div className="package-progress" role="status" aria-live="polite"><strong>Package analysis: {record.packageProgress.processed}/{record.packageProgress.total} pages</strong><span>Embedded text: {record.packageProgress.embedded} · OCR: {record.packageProgress.ocr} · Failed: {record.packageProgress.failed} · {label(record.packageProgress.status)}</span><progress aria-label={`Package analysis ${record.packageProgress.processed} of ${record.packageProgress.total} pages`} max={Math.max(1, record.packageProgress.total)} value={record.packageProgress.processed} /></div>}
+        {record.packagePages?.length ? <details className="page-extraction-details">
+          <summary>Page status / retry details</summary>
+          <div>{record.packagePages.map(page=><div key={page.page}>
+            <strong>Page {page.page}: {PAGE_OCR_LABELS[pageStatus(page)]}</strong>
+            {page.extractionStatus==="FAILED"&&page.error?<small> — {page.error}</small>:null}
+          </div>)}</div>
+        </details>:null}
         <div className="document-meta"><span>{Math.max(1, Math.round(record.size / 1024))} KB</span><span>{record.state.replaceAll("_", " ")}</span><span>{record.validation?.validationStatus?.replaceAll("_", " ") ?? "Not evaluated"}</span></div>
-<div className="record-actions"><Select value={record.documentType} onValueChange={(value) => reclassify(record, value as DocumentType)}><SelectTrigger size="sm" aria-label={`Classify ${record.fileName}`}><SelectValue /></SelectTrigger><SelectContent>{DOCUMENT_TYPES.map((type) => <SelectItem value={type} key={type}>{label(type)}</SelectItem>)}</SelectContent></Select><Button variant="outline" size="sm" onClick={() => window.open(repository.openUrl(record.id), "_blank", "noopener,noreferrer")}>Open</Button>{suggestDocumentFilename(record, insuredName) && <Button variant="outline" size="sm" onClick={() => renameSaved(record)}>Rename</Button>}{ocrUi.showOcr && <Button variant="outline" size="sm" disabled={!ocrUi.canOcr} onClick={() => void runCloudOcr(record).catch(error => persistPackageFailure(record, error))}><RefreshCw />{ocrUi.ocrLabel}</Button>}<Button variant="outline" size="sm" disabled={!ocrUi.canReparse} onClick={() => void reprocess(record).catch(error => persistPackageFailure(record, error))}><RefreshCw />{ocrUi.reparseLabel}</Button>{ocrUi.showRegenerate && <Button variant="outline" size="sm" disabled={!ocrUi.canRegenerate} onClick={() => void runCloudOcr(record, true).catch(error => persistPackageFailure(record, error))}>{ocrUi.regenerateLabel}</Button>}<Button variant="outline" size="sm" onClick={() => replaceSaved(record)}>Replace</Button>{record.parsed && <Button variant="outline" size="sm" onClick={() => correctExtraction(record)}>Correct</Button>}<Button variant="outline" size="sm" className="delete-document" onClick={() => deleteSaved(record)}>Delete</Button></div>
-        {(record.mimeType === "application/pdf" || record.logicalDocuments?.length) && <details className="section-manager"><summary>Manage sections</summary><Button variant="outline" size="sm" onClick={() => addSection(record)}>Add section</Button><div>{(record.logicalDocuments ?? []).map((section) => <article key={section.id}><div><strong>{label(section.documentType)}{section.subjectName ? ` — ${section.subjectName}` : ""}{section.documentSubtype ? ` — ${label(section.documentSubtype)}` : ""}</strong><span>{section.startPage === section.endPage ? `Page ${section.startPage ?? "—"}` : `Pages ${section.startPage ?? "—"}–${section.endPage ?? "—"}`} · Found · {label(section.validationStatus)}</span></div><Button variant="outline" size="sm" onClick={() => editSection(record, section)}>Edit</Button><Button variant="outline" size="sm" onClick={() => saveSections(record, (record.logicalDocuments ?? []).filter((item) => item.id !== section.id))}>Delete section</Button></article>)}</div></details>}
+<div className="record-actions"><Select value={record.documentType} onValueChange={(value) => reclassify(record, value as DocumentType)}><SelectTrigger size="sm" aria-label={`Classify ${record.fileName}`}><SelectValue /></SelectTrigger><SelectContent>{DOCUMENT_TYPES.map((type) => <SelectItem value={type} key={type}>{label(type)}</SelectItem>)}</SelectContent></Select><Button variant="outline" size="sm" onClick={() => window.open(repository.openUrl(record.id), "_blank", "noopener,noreferrer")}>Open</Button>{suggestDocumentFilename(record, insuredName) && <Button variant="outline" size="sm" onClick={() => renameSaved(record)}>Rename</Button>}{ocrUi.showOcr && <Button variant="outline" size="sm" disabled={!ocrUi.canOcr} onClick={() => void runLocalOcr(record).catch(error => persistPackageFailure(record, error))}><RefreshCw />{ocrUi.ocrLabel}</Button>}<Button variant="outline" size="sm" disabled={!ocrUi.canReparse} onClick={() => void reprocess(record).catch(error => persistPackageFailure(record, error))}><RefreshCw />{ocrUi.reparseLabel}</Button>{ocrUi.showRegenerate && <Button variant="outline" size="sm" disabled={!ocrUi.canRegenerate} onClick={() => void runLocalOcr(record, true).catch(error => persistPackageFailure(record, error))}>{ocrUi.regenerateLabel}</Button>}<Button variant="outline" size="sm" onClick={() => replaceSaved(record)}>Replace</Button>{record.parsed && <Button variant="outline" size="sm" onClick={() => correctExtraction(record)}>Correct</Button>}<Button variant="outline" size="sm" className="delete-document" onClick={() => deleteSaved(record)}>Delete</Button></div>
+        {(record.mimeType === "application/pdf" || record.logicalDocuments?.length) && <details className="section-manager"><summary>Manage sections</summary>
+        {(record.logicalDocuments??[]).filter(s=>["AUTO_APPLICATION","HAB_APPLICATION"].includes(s.documentType)).length>1&&
+          <Button variant="outline" size="sm" onClick={()=>void regroupApplication(record)}>
+            Regroup Signed Application
+          </Button>}
+        <Button variant="outline" size="sm" onClick={() => addSection(record)}>Add section</Button><div>{(record.logicalDocuments ?? []).map((section) => <article key={section.id}><div><strong>{label(section.documentType)}{section.subjectName ? ` — ${section.subjectName}` : ""}{section.documentSubtype ? ` — ${label(section.documentSubtype)}` : ""}</strong><span>{section.startPage === section.endPage ? `Page ${section.startPage ?? "—"}` : `Pages ${section.startPage ?? "—"}–${section.endPage ?? "—"}`} · Found · {label(section.validationStatus)}</span></div><Button variant="outline" size="sm" onClick={() => editSection(record, section)}>Edit</Button><Button variant="outline" size="sm" onClick={() => saveSections(record, (record.logicalDocuments ?? []).filter((item) => item.id !== section.id))}>Delete section</Button></article>)}</div></details>}
         {record.suggestedSections?.some((item) => item.suggestionStatus === "PENDING") && <details className="section-manager suggested-sections" open><summary>Suggested sections</summary><Button variant="outline" size="sm" onClick={() => void acceptAllSuggestions(record).catch((error) => persistPackageFailure(record, error))}>Accept all</Button><div>{record.suggestedSections.filter((item) => item.suggestionStatus === "PENDING").map((section) => <article key={section.id}><div><strong>{label(section.documentType)}</strong><span>{section.startPage === section.endPage ? `Page ${section.startPage}` : `Pages ${section.startPage}–${section.endPage}`} · {Math.round((section.classificationConfidence ?? 0) * 100)}% confidence</span><span>{section.evidenceSignals.join(" · ")}</span></div><Button variant="outline" size="sm" onClick={() => void reviewSuggestion(record, section.id, "ACCEPTED").catch((error) => persistPackageFailure(record, error))}>Accept</Button><Button variant="outline" size="sm" onClick={() => void editSuggestion(record, section).catch((error) => persistPackageFailure(record, error))}>Edit</Button><Button variant="outline" size="sm" onClick={() => void reviewSuggestion(record, section.id, "IGNORED").catch((error) => persistPackageFailure(record, error))}>Ignore</Button></article>)}</div></details>}
         {Boolean(record.raw?.metadata?.provider) && <p className="classification-reason">Provider: {label(String(record.raw?.metadata?.provider))}</p>}
         {(record.raw || record.packagePages?.length) && <details className="ocr-text-view"><summary>View OCR Text</summary><p>Normalized OCR text · read-only</p><pre>{recordText(record) || "No OCR text was returned."}</pre></details>}
-        {record.raw?.metadata && <details className="ocr-diagnostics"><summary>OCR diagnostics</summary><pre>{JSON.stringify({ requestSucceeded: record.raw.metadata.requestSucceeded ?? false, provider: record.raw.metadata.provider, providerAttempts: record.raw.metadata.providerAttempts, providerErrorCodes: record.raw.metadata.providerErrorCodes, charactersExtracted: ocrUi.chars, pageCount: record.raw.metadata.pageCount ?? record.raw.pages?.length ?? record.packagePages?.length ?? 0, classifier: record.raw.metadata.classification ?? record.classification.documentType, parserInvoked: record.raw.metadata.parserInvoked ?? record.raw.metadata.parser ?? "none", parserCandidateFields: record.raw.metadata.parserCandidateFields ?? [], vinCandidateCount: record.raw.metadata.vinCandidateCount ?? 0, finalParsedFieldCount: ocrUi.fieldCount, sanitizedPreview: record.raw.metadata.sanitizedPreview ?? "" }, null, 2)}</pre></details>}
+        {/* STEP5B05_DIAGNOSTICS */}{(record.raw || record.packagePages?.length || record.parsedSources?.length) && <details className="ocr-diagnostics"><summary>PDF / OCR diagnostics</summary><pre>{JSON.stringify(buildDocumentDiagnostics(record), null, 2)}</pre></details>}
         {record.raw?.metadata?.reviewReason === "OCR SERVER OFFLINE" && <p className="record-error"><XCircle /> OCR provider was unavailable during extraction · document kept for review. Check provider status; use {ocrUi.ocrLabel} for missing content or {ocrUi.reparseLabel} for saved text.</p>}
         {record.error && <p className="record-error"><XCircle /> {record.error}</p>}
         {record.parsed?.warnings.map((warning, index) => <p className="record-warning" key={`${warning.code}-${index}`}>{warning.code === "EXTRACTION_PROVIDER_REQUIRED" ? (ocrHealth.state === "ONLINE" ? "Image/scanned PDF — run OCR or enter manually." : "OCR provider not configured — manual entry available.") : warning.message}</p>)}

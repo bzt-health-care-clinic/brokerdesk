@@ -1,7 +1,7 @@
 name: Parser code-only verification snapshot
 on:
   push:
-    branches: [feature/broker-auditor-lan-pilot]
+    branches: [feature/broker-auditor-lan-pilot, fix/step5b-acceptance-20261030]
     paths: [.github/workflows/parser-source-snapshot.yml]
 permissions:
   contents: read

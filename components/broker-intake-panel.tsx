@@ -6,6 +6,7 @@ import type { InsuranceCase, Vehicle, Driver, PolicyChangeTransactionType } from
 import type { UploadedDocumentRecord } from "@/lib/extraction-types";
 import { activeParsedSources } from "@/lib/active-evidence";
 import { applyDocumentPresence } from "@/lib/document-package";
+import { ownershipReceiptStatus } from "@/lib/ownership-receipt";
 import { POLICY_CHANGE_TRANSACTIONS } from "@/lib/policy-change";
 import { hasOwnershipSectionForVehicle, confirmVehicleOwnership } from "@/lib/broker-file-intake";
 
@@ -44,6 +45,12 @@ export function BrokerIntakePanel({data,records,onChange}:Props){
         /^(no|false)$/i.test(String(source.data.leased??""))?false:null,
       lessor:String(source.data.lessor??""),fileName:record.fileName}))),
     [records]);
+  // Step 5B-02: a hashed, unreadable Ownership scan is RECEIVED, not VERIFIED.
+  const ownershipReceipt=ownershipReceiptStatus(records);
+  const uniqueVins=new Set(data.vehicles.map(v=>String(v.vin??"").toUpperCase()));
+  const ownershipNeedsVinReview=ownershipReceipt.received && auto &&
+    (data.vehicles.length===0 || uniqueVins.size!==data.vehicles.length ||
+      data.vehicles.some(v=>!v.ownership?.received || !hasOwnershipSectionForVehicle(v,records)));
   const missing=presence.documents.filter(d=>d.required&&!d.received);
   const supplemental=presence.documents.filter(d=>!d.required&&d.received);
   function changeVehicle(id:string,field:"year"|"make"|"model"|"vin"|"owner"|"ownerAddress"|"leaseStatus"|"lessor",value:string){
@@ -193,7 +200,7 @@ export function BrokerIntakePanel({data,records,onChange}:Props){
         </div>
         <label className="broker-ownership-verification">
           <input type="checkbox" aria-label={"Broker vehicle "+(index+1)+" ownership verified"}
-            checked={vehicle.ownership?.received===true}
+            checked={vehicle.ownership?.received===true && hasOwnershipSectionForVehicle(vehicle,records)}
             disabled={!hasOwnershipSectionForVehicle(vehicle,records)}
             onChange={event=>{
               if(event.target.checked && !window.confirm(
@@ -204,8 +211,9 @@ export function BrokerIntakePanel({data,records,onChange}:Props){
           I verified this vehicle against its active original Ownership section.
         </label>
         {!hasOwnershipSectionForVehicle(vehicle,records)&&
-          <small>Link an active Ownership section to this vehicle in Documents → Manage sections,
-            or confirm a matching VIN from parsed Ownership, before verifying.</small>}
+          <small>Ownership VIN evidence is not verified for this vehicle. A received
+            but unreadable scan requires OCR or a separate source-bound verification;
+            linking a section or checking a box alone cannot verify VIN.</small>}
         <Button size="sm" variant="outline" onClick={()=>{
           if(window.confirm("Remove vehicle from the submission?"))
             onChange({...data,vehicles:data.vehicles.filter(v=>v.id!==vehicle.id)});
@@ -227,12 +235,16 @@ export function BrokerIntakePanel({data,records,onChange}:Props){
     </section>}
     <section className="broker-intake-section" aria-label="Required document checklist">
       <h3>{auto?(change?"4":"3"):(change?"3":"2")} · Document completeness</h3>
-      <p>Checklist is calculated from active classified source sections. A filename alone cannot
-        prove a required document has been received.</p>
+      <p>The checklist distinguishes a current hashed original from verified vehicle evidence.
+        An uploaded Ownership PDF does not, by itself, verify a VIN.</p>
       <div className="broker-document-status">
         {presence.documents.filter(d=>d.required).map(doc=><div key={doc.id}
           className={doc.received?"received":"missing"}>
-          <strong>{doc.received?"Found":"Missing"}</strong><span>{doc.name}</span>
+          <strong>{doc.category==="ownership"&&doc.received?"Received":
+            doc.received?"Found":"Missing"}</strong><span>{doc.name}</span>
+          {doc.category==="ownership"&&doc.received&&ownershipNeedsVinReview&&
+            <small>Received — OCR / VIN verification required. Preflight still
+              requires matching evidence for every affected vehicle.</small>}
         </div>)}
         {!presence.documents.some(doc=>doc.required)&&
           <p>Transaction-specific document checks appear in the right-side Preflight panel.</p>}

@@ -10,6 +10,7 @@ import { primaryTransactionType } from "@/lib/intake-profile";
 import { isPolicyChange } from "@/lib/policy-change";
 import { pilotAuthorize, pilotCompareInsuredNames, pilotDownload, pilotPreflight } from "@/lib/pilot-client";
 import { appendSuggestedPolicyholder, parsedPolicyholderSuggestions } from "@/lib/intake-name-suggestions";
+import { signedApplicationChoices } from "@/lib/signed-application-choice"; // STEP5B04_SIGNED_APPLICATION
 
 type Props = {
   data: InsuranceCase;
@@ -62,10 +63,11 @@ export function SubmissionPanel({data,records,saveState,onCaseSaved,onNavigate}:
         .map(sec=>({id:r.id+"::"+(sec.id??""),documentId:r.id,logicalId:sec.id,type:sec.documentType,
           label:r.fileName+" — "+sec.documentType+" p."+(sec.startPage??1)+"–"+(sec.endPage??sec.startPage??1)})));
   },[data.case_type,records]);
-  const applicationDocs=newBusinessOptions.filter(o=>o.type.endsWith("_APPLICATION"));
+  const applicationDocs=useMemo(()=>signedApplicationChoices(records,data.case_type),[records,data.case_type]);
+  const verifiedApplicationDocs=applicationDocs.filter(o=>o.selectable);
   const quoteDocs=newBusinessOptions.filter(o=>o.type.endsWith("_QUOTE"));
-  const chosenApplication=applicationDocs.find(o=>o.id===applicationChoice) ??
-    applicationDocs.find(o=>o.documentId===data.signed_document_id &&
+  const chosenApplication=verifiedApplicationDocs.find(o=>o.id===applicationChoice) ??
+    verifiedApplicationDocs.find(o=>o.documentId===data.signed_document_id &&
       o.logicalId===data.signed_logical_document_id);
   const chosenQuote=quoteDocs.find(o=>o.id===quoteChoice)??quoteDocs[0];
   const applicationSuggestions=useMemo(()=>
@@ -142,8 +144,8 @@ export function SubmissionPanel({data,records,saveState,onCaseSaved,onNavigate}:
           <Button variant="outline" size="sm" disabled={busy} onClick={()=>void confirmNames(false)}>Revoke name comparison</Button></> :
         <><p>Open both original documents and enter each named policyholder on a separate line. Do not infer names from the Case summary.</p>
           <label>Signed Application
-            <select aria-label="Document for signed insured-name comparison" value={applicationChoice||applicationDocs.find(o=>o.documentId===data.signed_document_id&&o.logicalId===data.signed_logical_document_id)?.id||""} onChange={e=>setApplicationChoice(e.target.value)}>
-              <option value="">Choose signed application</option>{applicationDocs.map(o=><option value={o.id} key={o.id}>{o.label}</option>)}
+            <select aria-label="Document for signed insured-name comparison" value={applicationChoice||verifiedApplicationDocs.find(o=>o.documentId===data.signed_document_id&&o.logicalId===data.signed_logical_document_id)?.id||""} onChange={e=>setApplicationChoice(e.target.value)}>
+              <option value="">Choose signed application</option>{applicationDocs.map(o=><option value={o.id} key={o.id} disabled={!o.selectable}>{o.label}</option>)}
             </select></label>
           <label>Quote
             <select aria-label="Quote for insured-name comparison" value={quoteChoice||quoteDocs[0]?.id||""} onChange={e=>setQuoteChoice(e.target.value)}>
@@ -171,7 +173,7 @@ export function SubmissionPanel({data,records,saveState,onCaseSaved,onNavigate}:
                 onClick={()=>setQuoteNames(previous=>appendSuggestedPolicyholder(previous,suggestion.name))}>填入</Button>
             </div>)}
           </div>
-          <Button variant="outline" size="sm" disabled={busy||!data.signed||!applicationDocs.length||!quoteDocs.length}
+          <Button variant="outline" size="sm" disabled={busy||!data.signed||!verifiedApplicationDocs.length||!quoteDocs.length}
             onClick={()=>void confirmNames(true)}>Record manual name comparison</Button></>}
     </div>}
     {change && <div className="pilot-auth-control">

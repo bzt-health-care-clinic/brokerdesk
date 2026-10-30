@@ -3,11 +3,13 @@ import { isDriverReport, reportHeader } from "./report-boundaries.ts";
 import type { ClassificationResult, DocumentExtractor, DocumentParser, DocumentType, ExtractionInput, ExtractionProvider, ExtractionWarning, ParsedSource, RawExtractedDocument, UploadedDocumentRecord } from "./extraction-types.ts";
 import { ownershipFields } from "./ownership-fields.ts";
 import { parseAppliedRating } from "./applied-rating-parser.ts";
+import { extractAppliedQuoteNumber } from "./applied-quote-number.ts";
 import { parseSignedApplication } from "./signed-application-layout.ts";
 import { parseMvrLayout, parseDashLayout } from "./driver-report-layout.ts";
 const CRITICAL_FIELD_CONFIDENCE = .9;
 export const EXTRACTION_PIPELINE_VERSION = 2;
-export const PARSER_VERSION = 8;
+// Step 5B-01: bump AUTO_QUOTE only; other v8 parsers stay valid.
+export const PARSER_VERSION = 9;
 // Reparse only sources whose structured fields changed; binary proof photos and
 // signature-only files do not need OCR to remain valid supporting evidence.
 export function requiredParserVersion(record: UploadedDocumentRecord) {
@@ -15,7 +17,8 @@ export function requiredParserVersion(record: UploadedDocumentRecord) {
     ...(record.packagePages??[]).map(page=>page.classification.documentType)];
   const expanded=new Set<DocumentType>([
     "AUTO_APPLICATION","AUTO_QUOTE","HAB_APPLICATION","HAB_QUOTE","POLICY_CHANGE"]);
-  return kinds.some(type=>isDriverReport(type)||expanded.has(type))?PARSER_VERSION:3;
+  return kinds.includes("AUTO_QUOTE")?PARSER_VERSION:
+    kinds.some(type=>isDriverReport(type)||expanded.has(type))?8:3;
 }
 
 export function invalidateStaleExtraction(record: UploadedDocumentRecord): UploadedDocumentRecord {
@@ -234,6 +237,16 @@ abstract class KeyValueParser implements DocumentParser<Record<string, unknown>>
         fieldEvidence[field] = [{ page: page?.pageNumber ?? page?.page ?? 1, text: value, boundingBox: block?.boundingBox, confidence: block?.confidence ?? page?.confidence ?? raw.confidence ?? .8 }];
       }
     }
+    // Step 5B-01: even the non-Applied AUTO_QUOTE fallback must use explicit
+    // labels and a physical-page proof, never the generic "Quote"/"Submission" alias.
+    if (this.documentType === "AUTO_QUOTE") {
+      delete data.quoteNumber;
+      delete fieldEvidence.quoteNumber;
+      const quote = extractAppliedQuoteNumber(raw);
+      if (quote.value !== undefined) data.quoteNumber = quote.value;
+      if (quote.evidence.length) fieldEvidence.quoteNumber = quote.evidence;
+      rejected.push(...quote.warnings);
+    }
     const noText = !text.trim();
     const warnings: ExtractionWarning[] = noText ? [{ code: "EXTRACTION_PROVIDER_REQUIRED", message: "This PDF/image requires a configured text/OCR provider or manual entry.", severity: "medium" }] : [];
     warnings.push(...rejected);
@@ -250,7 +263,7 @@ abstract class KeyValueParser implements DocumentParser<Record<string, unknown>>
 }
 
 export class AutoApplicationParser extends KeyValueParser { documentType = "AUTO_APPLICATION" as const; fields = { insurer: ["Insurance Company", "Insurer", "Carrier"], quoteNumber: ["Quote", "Submission"], namedInsured: ["Named Insured", "Applicant", "Insured"], coInsured: ["Co-Insured", "Co Insured"], effectiveDate: ["Effective Date", "Effective"], vin: ["VIN"], vehicleUse: ["Primary Use", "Use"], annualKm: ["Annual KM", "Annual Kilometres"], commuteKm: ["Commute KM", "One-way commute"], g1Date: ["G1 Date", "G1"], g2Date: ["G2 Date", "G2"], gDate: ["G Date", "G"], telematicsPhone: ["Telematics Phone", "Registered Phone"], telematicsEmail: ["Telematics Email", "Registered Email"], premium: ["Annual Premium", "Premium"], driverName: ["Driver Name", "Driver", "Operator Name"], dob: ["Date of Birth", "DOB"], licenceNumber: ["Licence Number", "Driver Licence Number"], licenceClass: ["Licence Class", "DL Class"], liability: ["Third Party Liability", "Liability Limit", "Liability"], dcpdDeductible: ["DCPD Deductible"], allPerilsDeductible: ["All Perils Deductible"], deductibles: ["Deductibles"], endorsements: ["Endorsements", "OPCF Selections"], purchaseDate: ["Purchase Date"], purchasePrice: ["Purchase Price"], garagingAddress: ["Garaging Address", "Garage Address"], businessUsePercent: ["Business Use Percent", "Business Use %"], winterTires: ["Winter Tires"], leased: ["Leased"], previousInsurer: ["Previous Insurer"], priorPolicyNumber: ["Previous Policy Number", "Prior Policy Number"], insuredSince: ["Auto Insured Since", "Insured Since"], dateWithCompany: ["Date With Company"], continuousInsurance: ["Continuous Insurance"] }; }
-export class AutoQuoteParser extends KeyValueParser { documentType = "AUTO_QUOTE" as const; fields = { insurer: ["Insurance Company", "Carrier", "Insurer"], quoteNumber: ["Quote Number", "Quote", "Submission"], namedInsured: ["Named Insured", "Insured"], coInsured: ["Co-Insured", "Co Insured", "Second Named Insured"], effectiveDate: ["Effective Date", "Effective"], vin: ["VIN"], annualKm: ["Annual KM"], commuteKm: ["Commute KM"], premium: ["Annual Premium", "Premium"], telematicsDiscount: ["Telematics Discount"], driverName: ["Driver Name", "Driver", "Operator Name"], dob: ["Date of Birth", "DOB"], licenceNumber: ["Licence Number", "Driver Licence Number"], licenceClass: ["Licence Class", "DL Class"], liability: ["Third Party Liability", "Liability Limit", "Liability"], dcpdDeductible: ["DCPD Deductible"], allPerilsDeductible: ["All Perils Deductible"], deductibles: ["Deductibles"], endorsements: ["Endorsements", "OPCF Selections"], purchaseDate: ["Purchase Date"], purchasePrice: ["Purchase Price"], garagingAddress: ["Garaging Address", "Garage Address"], businessUsePercent: ["Business Use Percent", "Business Use %"], winterTires: ["Winter Tires"], leased: ["Leased"], previousInsurer: ["Previous Insurer"], priorPolicyNumber: ["Previous Policy Number", "Prior Policy Number"], insuredSince: ["Auto Insured Since", "Insured Since"], dateWithCompany: ["Date With Company"], continuousInsurance: ["Continuous Insurance"] }; }
+export class AutoQuoteParser extends KeyValueParser { documentType = "AUTO_QUOTE" as const; fields = { insurer: ["Insurance Company", "Carrier", "Insurer"], quoteNumber: ["Here is your quote number", "Quote Number"], namedInsured: ["Named Insured", "Insured"], coInsured: ["Co-Insured", "Co Insured", "Second Named Insured"], effectiveDate: ["Effective Date", "Effective"], vin: ["VIN"], annualKm: ["Annual KM"], commuteKm: ["Commute KM"], premium: ["Annual Premium", "Premium"], telematicsDiscount: ["Telematics Discount"], driverName: ["Driver Name", "Driver", "Operator Name"], dob: ["Date of Birth", "DOB"], licenceNumber: ["Licence Number", "Driver Licence Number"], licenceClass: ["Licence Class", "DL Class"], liability: ["Third Party Liability", "Liability Limit", "Liability"], dcpdDeductible: ["DCPD Deductible"], allPerilsDeductible: ["All Perils Deductible"], deductibles: ["Deductibles"], endorsements: ["Endorsements", "OPCF Selections"], purchaseDate: ["Purchase Date"], purchasePrice: ["Purchase Price"], garagingAddress: ["Garaging Address", "Garage Address"], businessUsePercent: ["Business Use Percent", "Business Use %"], winterTires: ["Winter Tires"], leased: ["Leased"], previousInsurer: ["Previous Insurer"], priorPolicyNumber: ["Previous Policy Number", "Prior Policy Number"], insuredSince: ["Auto Insured Since", "Insured Since"], dateWithCompany: ["Date With Company"], continuousInsurance: ["Continuous Insurance"] }; }
 export class OwnershipParser extends KeyValueParser {
   documentType = "OWNERSHIP" as const;
   fields = {};

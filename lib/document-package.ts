@@ -1,4 +1,5 @@
 import type { DocumentType, UploadedDocumentRecord } from "./extraction-types.ts";
+import { ownershipReceiptStatus } from "./ownership-receipt.ts";
 
 export function activeDocumentTypes(records: UploadedDocumentRecord[]) {
   return new Set<DocumentType>(records.flatMap((record) => (record.logicalDocuments === undefined ? [{ documentType: record.documentType, presenceStatus: "FOUND" as const }] : record.logicalDocuments).filter((item) => item.presenceStatus === "FOUND").map((item) => item.documentType)));
@@ -14,7 +15,14 @@ export function applyDocumentPresence<T extends { documents: Array<{ category: s
   const active = activeDocumentTypes(records); const next = structuredClone(item);
   const shared = [{ category: "bill_of_sale", name: "Bill of Sale", type: "BILL_OF_SALE" }, { category: "vehicle_photo", name: "Vehicle Photo", type: "VEHICLE_PHOTO" }, { category: "diploma", name: "Graduation Certificate", type: "DRIVER_TRAINING_CERTIFICATE" }, { category: "payment_authorization", name: "Payment Authorization", type: "PAYMENT_AUTHORIZATION" }, { category: "cancellation_request", name: "Cancellation Request", type: "CANCELLATION_REQUEST" }] as const;
   for (const document of shared) if (active.has(document.type) && !next.documents.some((entry) => entry.category === document.category)) next.documents.push({ id: `shared-${document.category}`, name: document.name, category: document.category, required: false, received: true } as T["documents"][number]);
-  next.documents = next.documents.map((document) => ({ ...document, received: (categoryTypes[document.category] ?? []).some((type) => active.has(type)) }));
+  // Step 5B-02: receipt is physical; the VIN verification gate remains separate.
+  // Only Ownership is changed here. Do not loosen general document rules.
+  const scannedOwnership = ownershipReceiptStatus(records).received;
+  next.documents = next.documents.map((document) => ({
+    ...document,
+    received: document.category === "ownership" ? scannedOwnership
+      : (categoryTypes[document.category] ?? []).some((type) => active.has(type)),
+  }));
   if (next.ownership) next.ownership.received = active.has("OWNERSHIP");
   return next;
 }

@@ -1,6 +1,6 @@
 // Entirely synthetic geometric fixtures. No original client PDFs, names, licences or locations.
 import assert from 'node:assert/strict';
-import { parserFor, classifyDocument } from '../lib/document-ingestion.ts';
+import { parserFor, classifyDocument, PARSER_VERSION } from '../lib/document-ingestion.ts';
 import { parseAppliedRating } from '../lib/applied-rating-parser.ts';
 import { parseMvrLayout, parseDashLayout } from '../lib/driver-report-layout.ts';
 import { pdfLayoutPage } from '../lib/pdf-layout.ts';
@@ -192,7 +192,7 @@ const mixedCache={...record,parserVersion:5,extractionVersion:2,sectionAnalysisV
     {...clean,extractionStatus:'COMPLETE',classification:{documentType:'MVR'}}],
   parsedSources:[{...scoped,logicalDocumentId:'applied-section',data:{annualKm:'WRONG LEGACY FIELD'}}]};
 const refreshedMixed=await refreshParserVersion(mixedCache);
-assert.equal(refreshedMixed.parserVersion,8);
+assert.equal(refreshedMixed.parserVersion,PARSER_VERSION);
 assert.equal(refreshedMixed.parsedSources.find(s=>s.documentType==='AUTO_QUOTE').entities[0].data.annualKm,12345,
   'A mixed report upgrade must reparse the Applied section too, not only MVR/DASH.');
 console.log('Synthetic Applied geometry, MVR/DASH identity, exclusions and source-page regressions: PASS');

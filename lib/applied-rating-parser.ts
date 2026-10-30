@@ -1,5 +1,6 @@
 import type { DocumentType, ExtractionWarning, FieldEvidence, ParsedEntity, ParsedSource, RawExtractedDocument } from './extraction-types.ts';
 import { LayoutReader, cleanLayoutText, evidenceOf, joinCells, labelKey, templateDate, type LayoutCell } from './layout-reader.ts';
+import { extractAppliedQuoteNumber } from './applied-quote-number.ts';
 
 type Kind = 'text' | 'number' | 'money' | 'date' | 'bool' | 'vin' | 'licence' | 'person' | 'year';
 interface Spec { key: string; labels: string[]; kind: Kind; }
@@ -117,6 +118,13 @@ export function parseAppliedRating(raw:RawExtractedDocument,type:DocumentType):P
   const result:ParsedSource={documentId:String(raw.metadata?.fileId??'unidentified'),documentType:type,
     parsedAt:new Date().toISOString(),confidence:.85,data:{},fieldEvidence:{},warnings:[],entities:[],layoutVersion:1};
   const blocked=new Set<string>();
+  // Step 5B-01: a labelled quote number is policy-scoped, not a vehicle/driver cell.
+  if (type === 'AUTO_QUOTE') {
+    const quote = extractAppliedQuoteNumber(raw);
+    if (quote.value !== undefined) result.data.quoteNumber = quote.value;
+    if (quote.evidence.length) result.fieldEvidence.quoteNumber = quote.evidence;
+    result.warnings.push(...quote.warnings);
+  }
   const auto=type==='AUTO_APPLICATION'||type==='AUTO_QUOTE';
   for(const page of raw.pages??[]){
     const reader=new LayoutReader(page,dictionary);

@@ -241,6 +241,34 @@ export default function BrokerReviewPage() {
     </section>
     {error&&<div role="alert" className="rounded border border-red-500 p-3 whitespace-pre-line text-red-700">{error}</div>}
     {notice&&<div role="status" className="rounded bg-slate-100 p-3">{notice}</div>}
+    {data?.keyinCoverage&&<section className="border rounded-xl p-4 space-y-2"
+      aria-label="Key-in catalog coverage" data-testid="step5b08-coverage">
+      <h2 className="font-semibold">Key-in field inventory · 5B-08</h2>
+      <p className="text-sm">
+        {data.keyinCoverage.totals.catalogFields} fields in this Case ·
+        {" "}{data.keyinCoverage.totals.sourceBound} source-bound ·
+        {" "}{data.keyinCoverage.totals.brokerEdited} Broker edited ·
+        {" "}{data.keyinCoverage.totals.requiredMissing} required fields blank ·
+        {" "}{data.keyinCoverage.totals.conflicts} conflicts ·
+        {" "}{data.keyinCoverage.totals.physicalReports} physical MVR/DASH reports
+      </p>
+      <p className="text-xs text-slate-600">
+        Counts refer to the current BrokerDesk field catalog, not carrier-specific
+        Key-in coverage, OCR accuracy, or business acceptance.
+      </p>
+      <details>
+        <summary className="cursor-pointer text-sm">View section inventory and source reconciliation</summary>
+        <div className="text-sm space-y-1 mt-2">
+          {data.keyinCoverage.sections.map(s=><p key={s.id}>
+            {s.id}: {s.total} fields, {s.requiredMissing} required blank
+          </p>)}
+          {data.keyinCoverage.reconciliationIssues.map((issue,i)=>
+            <p key={i} className="text-amber-700">{issue}</p>)}
+          {data.keyinCoverage.warnings.map((issue,i)=>
+            <p key={"warning-"+i} className="text-slate-600">{issue}</p>)}
+        </div>
+      </details>
+    </section>}{/* STEP5B08_KEYIN_COVERAGE */}
     {data?.sourceIssues.length ? <div className="rounded border border-amber-500 p-3 space-y-2">
       <p className="font-semibold">Original Case or file source changed / unavailable</p>
       {data.sourceIssues.map((issue,i)=><p className="text-sm" key={i}>{issue}</p>)}

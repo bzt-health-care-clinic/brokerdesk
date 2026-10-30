@@ -29,6 +29,13 @@ export class BrowserPdfPageAdapter implements PdfPageAdapter {
     const pdfDocument = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()), useSystemFonts: true }).promise;
     return {
       pageCount: pdfDocument.numPages,
+      // Step 5B-03: only zero PDF rendering operators qualify as a known blank.
+      // A white-looking scan is NOT assumed blank; it still needs OCR.
+      async isBlankPage(pageNumber) {
+        const page=await pdfDocument.getPage(pageNumber);
+        const operators=await page.getOperatorList();
+        return operators.fnArray.length===0;
+      },
       async embeddedText(pageNumber) { const page = await pdfDocument.getPage(pageNumber); const content = await page.getTextContent(); return normalizeOcrText(pdfTextLines(content.items.map((item) => "str" in item ? item : {}))); },
       async embeddedPage(pageNumber) {
         const page = await pdfDocument.getPage(pageNumber);

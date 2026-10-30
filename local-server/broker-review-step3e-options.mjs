@@ -33,12 +33,15 @@ function coverageFromRows(data) {
       coverage.collision={present:true,...(amount!==null?{deductible:amount}:{})};
    } else if(/^comprehensive\b/.test(label)) {
       coverage.comprehensive={present:true,...(amount!==null?{deductible:amount}:{})};
-   } else if(/^bodily injury\b/.test(label) && amount!==null)coverage.liability=amount;
+   } else if(/^direct compensation\b/.test(label) && amount!==null)coverage.dcpdDeductible=amount;
+   else if(/^bodily injury\b/.test(label) && amount!==null)coverage.liability=amount;
    const opcf=label.match(/^#\s*(\d+[a-z]?)(?:\b|$)/i);
    if(opcf) selected.push(opcf[1].toUpperCase());
  }
  if(Number.isFinite(Number(data.liability))&&nonblank(data.liability))
     coverage.liability=Number(data.liability);
+ if(Number.isFinite(Number(data.dcpdDeductible))&&nonblank(data.dcpdDeductible))
+     coverage.dcpdDeductible=Number(data.dcpdDeductible);
  if(Number.isFinite(Number(data.allPerilsDeductible))&&nonblank(data.allPerilsDeductible))
     coverage.allPerils={present:true,deductible:Number(data.allPerilsDeductible)};
  if(selected.length){
@@ -147,7 +150,7 @@ export function deriveStep3eOptions(item,docs) {
  const byReportId=new Map();
  for(const context of docs.sources??[]){
    const s=context.observation,data=s?.data;
-   if(!filled(data))continue;
+   if(!filled(data)||s?.excluded===true||data?.excluded===true)continue; // STEP5B06_VEHICLE_ISOLATION
    if(["AUTO_QUOTE","AUTO_APPLICATION"].includes(s.documentType)) {
       const match=byVin.get(norm(data.vin));
       if(match && !s.excluded) {

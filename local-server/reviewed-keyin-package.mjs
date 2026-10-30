@@ -7,6 +7,7 @@
  */
 import { verifyBrokerSnapshot } from "../lib/broker-keyin-review.mjs";
 import {step3eConsistencyIssues} from "./broker-review-step3e-compat.mjs";
+import {keyinPackageIntegrityIssues} from "../lib/step5b08-keyin-coverage.mjs"; // STEP5B08_KEYIN_COVERAGE
 
 export const REVIEWED_KEYIN_PACKAGE_PATH = "reviewed-keyin.json";
 export const REVIEWED_KEYIN_PACKAGE_VERSION = "0.4-reviewed-keyin";
@@ -39,7 +40,9 @@ export function reviewedCaseConsistencyIssues(snapshot, item) {
   const fields=new Map((snapshot?.fields??[]).map(field=>[field.id,field.value]));
   for (const [key,actual] of [
     ["policy.insurer",item.policy?.company],["policy.insured",item.insured?.name],
-    ["policy.number",item.policy?.policy_number]
+    ["policy.number",item.policy?.policy_number],
+    // Step 5B-01: fail if Broker's reviewed Quote # and outbound Case differ.
+    ["policy.quoteNumber",item.policy?.auto_quote_number || item.policy?.hab_quote_number || item.policy?.quote_number]
   ]) {
     const reviewed=fields.get(key);
     if (reviewed !== undefined && reviewed !== null && (key==="policy.insured" ?
@@ -71,7 +74,8 @@ export function reviewedCaseConsistencyIssues(snapshot, item) {
 export function validateReviewedKeyinPackage(snapshot,item,records,submittedAt) {
   const issues=[
     ...verifyBrokerSnapshot(snapshot,{submissionDate:String(submittedAt??"").slice(0,10)}),
-    ...reviewedCaseConsistencyIssues(snapshot,item)
+    ...reviewedCaseConsistencyIssues(snapshot,item),
+    ...keyinPackageIntegrityIssues(snapshot,item,records) // STEP5B08_KEYIN_COVERAGE
   ];
   const recordsById=new Map((records??[]).map(r=>[r.id,r]));
   const declaredById=new Map((snapshot.source_files??[]).map(f=>[f.id,f.sha256]));

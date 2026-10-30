@@ -6,6 +6,7 @@ import { resolveDataPaths } from "./paths.mjs";
 import { LocalRepositories } from "./repositories.mjs";
 import { SubmissionPilotService } from "./submission-service.mjs";
 import { ocrSpaceHealth, requestOcrSpace } from "./ocr-space.mjs";
+import { localOcrHealth, requestLocalTesseract } from "./local-tesseract.mjs"; // Step 5B-03
 import { loadLocalEnvironment } from "./env-loader.mjs";
 import { localAllowedOrigins } from "./origins.mjs";
 import { BrokerReviewService } from "./broker-review-integration.mjs"; // STEP2_BROKER_REVIEW_IMPORT
@@ -54,6 +55,15 @@ export const server = http.createServer(async (request, response) => {
       const documents = selectedId ? repositories.listDocuments(selectedId) : [];
       const notes = selectedId ? repositories.getNotes(selectedId) : {};
       return sendJson(response, request, 200, { cases, selected, documents, notes });
+    }
+    if (request.method === "GET" && url.pathname === "/local-ocr/health")
+      return sendJson(response,request,200,await localOcrHealth());
+    if (request.method === "POST" && url.pathname === "/local-ocr") {
+      const form=await readForm(request);
+      const file=form.get("file");
+      try { return sendJson(response,request,200,await requestLocalTesseract(file)); }
+      catch(error) { return sendJson(response,request,error.status||502,
+        {error:error.message,code:error.code||"OCR_LOCAL_FAILED"}); }
     }
     if (request.method === "GET" && url.pathname === "/ocr-space/health") return sendJson(response, request, 200, ocrSpaceHealth());
     if (request.method === "POST" && url.pathname === "/ocr-space") { const form = await readForm(request); const file = form.get("file"); if (!(file instanceof File)) throw Object.assign(new Error("File is required"), { status: 400, code: "OCR_INVALID_INPUT" }); try { const raw = await requestOcrSpace(file, { pageCount: form.get("pageCount"), startPage: form.get("startPage"), endPage: form.get("endPage"), isTable: form.get("isTable") === "true" }); return sendJson(response, request, 200, raw); } catch (error) { return sendJson(response, request, error.status || 502, { error: error.message, code: error.code || "OCR_PROVIDER_ERROR" }); } }

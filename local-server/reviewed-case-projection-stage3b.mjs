@@ -140,6 +140,15 @@ export function projectBrokerReviewedCase(item,review){
     const dest=projected[parent]??(projected[parent]={});
     apply(dest,key,fieldId,convert);
   }
+  // Step 5B-01: the reviewed Quote # must agree with the outbound Case.
+  // Only project a real reviewed value; optional Policy Change blanks stay blank.
+  if(fields.get("policy.quoteNumber") !== null &&
+     fields.get("policy.quoteNumber") !== undefined) {
+    const policy=projected.policy??(projected.policy={});
+    apply(policy,"quote_number","policy.quoteNumber",requiredString);
+    if(Object.prototype.hasOwnProperty.call(policy,"auto_quote_number"))
+      apply(policy,"auto_quote_number","policy.quoteNumber",requiredString);
+  }
   // Never silently switch insurers: doing so changes required document rules.
   if(fields.has("policy.insurer") &&
      normalText(fields.get("policy.insurer"))!==normalText(item.policy?.company))

@@ -68,6 +68,8 @@ export function verifiedReviewDocuments(repo, caseId) {
 }
 
 const sourceKeys = Object.freeze({
+  // Step 5B-01: only explicitly labelled AUTO_QUOTE evidence may set this field.
+  "policy.quoteNumber":["quoteNumber"],
   "policy.insured":["insuredName","namedInsured"],
   "policy.mailingAddress":["mailingAddress"],
   "policy.riskAddress":["riskAddress"],
@@ -82,6 +84,7 @@ const vehicleKeys = Object.freeze({
   vin:["vin"],year:["year"],make:["make"],model:["model"],use:["vehicleUse"],
   annualKm:["annualKm"],commuteOneWayKm:["commuteKm","commuteOneWayKm"],
   winterTires:["winterTires"],liability:["liability"],
+  dcpdDeductible:["dcpdDeductible"], // STEP5B06_VEHICLE_ISOLATION
   "allPerils.deductible":["allPerilsDeductible"],
   "collision.deductible":["collisionDeductible"],
   "comprehensive.deductible":["comprehensiveDeductible"],
@@ -112,7 +115,17 @@ const valueConvert = (field, value) => {
   return value;
 };
 const evidencePage = (source, key, record) => {
-  if (record.state === "NEEDS_REVIEW" || record.extractionStatus === "NEEDS_REVIEW") return null;
+  // Step 5B-01: a mixed PDF may need review for unrelated pages.
+  // Quote auto-fill is permitted only from a completed, individually proven page.
+  if (record.state === "FAILED" || record.extractionStatus === "FAILED") return null;
+  if (record.state === "NEEDS_REVIEW" || record.extractionStatus === "NEEDS_REVIEW") {
+    if (key !== "quoteNumber") return null;
+    const proof = source.fieldEvidence?.quoteNumber;
+    if (!Array.isArray(proof) || proof.length !== 1) return null;
+    const page = (record.packagePages ?? []).find(p =>
+      p.page === proof[0]?.page || p.pageNumber === proof[0]?.page);
+    if (!page || page.extractionStatus !== "COMPLETE") return null;
+  }
   // OCR or unverified parser warnings are candidates for human review, never
   // verified auto-fill. Native text remains eligible if its field is reliable.
   if ((source.warnings??[]).some(w=>w.field===key &&
@@ -182,6 +195,8 @@ export function buildExplicitReviewCandidates(caseData, catalogFields, verifiedS
        !s.entityKind) {
       for(const [id,keys] of Object.entries(sourceKeys)) {
         if (!id.startsWith("policy.")) continue;
+        // Step 5B-01: a Quote Number must not come from an Application or another doc.
+        if (id === "policy.quoteNumber" && s.documentType !== "AUTO_QUOTE") continue;
         if (id==="policy.insured" && !sameName(data.insuredName??data.namedInsured,caseData.insured?.name)) {
           skipped.push(id);continue;
         }

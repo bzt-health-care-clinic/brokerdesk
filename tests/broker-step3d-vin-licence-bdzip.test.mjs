@@ -78,8 +78,12 @@ function fixture({ownershipFileVin=NEW_VIN}={}){
     const sec=id+"S";
     // The synthetic MVR/DASH bytes expressly contain zero-record assertions.
     // No unreadable report is silently converted to a clean report.
-    const reportFact=type==="MVR"?" | reportedConvictionCount=0 | convictions=[]":
-      type==="DASH"?" | reportedClaimCount=0 | claims=[]":"";
+    // The physical synthetic report bytes explicitly state the report-wide total.
+    // This is a test declaration, NOT proof of a driver's lifetime history.
+    const countKey=type==="MVR"?"reportedConvictionCount":type==="DASH"?"reportedClaimCount":null;
+    const countLabel=type==="MVR"?"TOTAL REPORTED CONVICTIONS: 0":
+      type==="DASH"?"TOTAL REPORTED CLAIMS (ENTIRE REPORT): 0":null;
+    const reportFact=countLabel?" | "+countLabel+" | "+(type==="MVR"?"convictions=[]":"claims=[]"):"";
     const bytes=Buffer.from("SYNTHETIC STEP 3D | "+type+" | "+id+" | "+(vin??"")+reportFact+"\n");
     const reportData=type==="MVR"?{pulledDate:day,reportedConvictionCount:0,convictions:[]}:
       type==="DASH"?{pulledDate:day,reportedClaimCount:0,claims:[]}:null;
@@ -88,6 +92,11 @@ function fixture({ownershipFileVin=NEW_VIN}={}){
       documentType:type,state:"PARSED",
       classification:{documentType:type,confidence:1,reason:"synthetic manual evidence"},
       logicalDocuments:[section(sec,id,type,type==="OWNERSHIP"?CAR_ID:null)],
+      ...(countKey?{packagePages:[{
+        page:1,pageNumber:1,text:bytes.toString("utf8"),confidence:1,
+        extractionProvider:"embedded_pdf_text",extractionStatus:"COMPLETE",
+        classification:{documentType:type,confidence:1,reason:"synthetic explicit count page"}
+      }]}:{}),
       ...(type==="OWNERSHIP"?{parsedSources:[{
         documentId:id,documentType:type,logicalDocumentId:sec,
         parsedAt:new Date().toISOString(),confidence:1,
@@ -96,7 +105,9 @@ function fixture({ownershipFileVin=NEW_VIN}={}){
         documentId:id,documentType:type,logicalDocumentId:sec,
         parsedAt:new Date().toISOString(),confidence:1,
         data:reportData,warnings:[],
-        fieldEvidence:{pulledDate:[{page:1,source:"synthetic-fixture",confidence:1}]}
+        fieldEvidence:{pulledDate:[{page:1,source:"synthetic-fixture",confidence:1}],
+          [countKey]:[{page:1,documentId:id,logicalDocumentId:sec,sourceHash:sha(bytes),
+            documentType:type,text:countLabel,confidence:1}]}
       }]}:{})
     };
     ids[type]={id,sec,bytes,stored:repo.saveDocument(item.case_id,record,bytes,id+".pdf")};

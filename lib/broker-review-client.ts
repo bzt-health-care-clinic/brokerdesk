@@ -22,8 +22,23 @@ export interface BrokerReview {
   sections:ReviewSection[];
   fields:ReviewField[];
 }
+// STEP5B08_KEYIN_COVERAGE: counts are catalog-level, not OCR accuracy or carrier coverage.
+export interface BrokerKeyinCoverage {
+  schemaVersion:string;
+  totals:{catalogFields:number;required:number;missing:number;
+    requiredMissing:number;sourceBound:number;brokerEdited:number;
+    caseUnverified:number;conflicts:number;physicalReports:number};
+  sections:Array<{id:string;total:number;missing:number;requiredMissing:number}>;
+  fields:Array<{id:string;section:string;required:boolean;state:string;
+    origin:string|null;evidenceCount:number}>;
+  structuralIssues:string[];
+  reconciliationIssues:string[];
+  fieldIssues:string[];
+  warnings:string[];
+}
 export interface BrokerReviewStatus {
   review:BrokerReview|null;
+  keyinCoverage?:BrokerKeyinCoverage|null;
   sourceIssues:string[];
   fieldIssues:Array<{sectionId:string;message:string}>;
   confirmed:number;

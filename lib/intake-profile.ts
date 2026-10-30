@@ -5,6 +5,7 @@ import { runPhase3Rules } from "./phase3-rules.ts";
 import { reviewUploadedDocuments } from "./document-underwriting.ts";
 import { applyDocumentPresence } from "./document-package.ts";
 import { isSignedEvidenceStillValid } from "./signed-verification.ts";
+import { signedApplicationSelectionValid } from "./signed-application-choice.ts"; // STEP5B04_SIGNED_APPLICATION
 import { isPolicyChange, normalizePolicyChangeTransactions } from "./policy-change.ts";
 import { changeSignersValid, insuredPersonNames, isCancellationChange, nameComparisonEvidenceValid, requiresSeparateSigners, sameNamedPersons } from "./intake-person-evidence.ts";
 import type { ChangeSignerAttestation } from "./intake-person-evidence.ts";
@@ -129,7 +130,8 @@ export function evaluateIntakeProfile(
       push("INTAKE_UNSUPPORTED_CASE_TYPE", "Only new business and policy changes can be submitted.", "case_type");
     const signedRecord = records.find(r => r.id === item.signed_document_id);
     if (!item.signed || !item.signed_verified_at || !signedRecord || !digestPresent(signedRecord) ||
-      !isSignedEvidenceStillValid(records, item).valid)
+      !isSignedEvidenceStillValid(records, item).valid ||
+      (signedRecord && !signedApplicationSelectionValid(signedRecord, item.signed_logical_document_id).valid))
       push("INTAKE_SIGNED_APPLICATION", "Signed application must be manually verified against an active, unchanged source PDF.", "signed", undefined, item.signed_document_id);
     // Compare both original documents and the Case identities; checklist flags cannot satisfy this.
     if (!nameComparisonEvidenceValid(item, records))

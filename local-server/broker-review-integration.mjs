@@ -10,7 +10,11 @@ import {
   missingPhysicalChecklistDocuments
 } from "./broker-review-source.mjs";
 import {deriveStep3eOptions} from "./broker-review-step3e-options.mjs";
+import {analyzeVehicleSourceConflicts} from "../lib/step5b06-vehicle-isolation.mjs";
+import {analyzeDriverHistory} from "../lib/step5b07-driver-history.mjs"; // STEP5B07_DRIVER_HISTORY_INTEGRITY // STEP5B06_VEHICLE_ISOLATION
 import {enrichStep3eRemarks} from "./broker-review-step3e-remarks.mjs";
+import {buildKeyinCatalog} from "../lib/keyin-field-catalog.mjs"; // STEP5B08_KEYIN_COVERAGE
+import {assessKeyinCoverage} from "../lib/step5b08-keyin-coverage.mjs";
 
 const err=(message,status=409,blockers=[])=>Object.assign(new Error(message),{status,blockers});
 const actorOf=value=>{
@@ -146,7 +150,11 @@ export class BrokerReviewService {
     const options=deriveStep3eOptions(live.item,live.docs);
     const scratch=createBrokerReview(live.item,{...options,sourceFiles:live.docs.verified});
     const mapped=buildExplicitReviewCandidates(live.item,scratch.fields,live.docs.sources);
-    return {...options,sourceFiles:live.docs.verified,candidates:mapped.candidates};
+    const isolation=analyzeVehicleSourceConflicts(live.item,live.docs.sources);
+    const history=analyzeDriverHistory(live.item,live.docs.sources??[]); // STEP5B07_DRIVER_HISTORY_INTEGRITY
+    return {...options,sourceFiles:live.docs.verified,candidates:mapped.candidates,
+      conflictingFieldIds:isolation.conflictingFieldIds,
+      driverHistoryIntegrity:history};
   }
   saveBinding(caseId,live) {
     this.db.prepare(`INSERT INTO keyin_review_bindings(case_id,case_fingerprint,source_fingerprint,updated_at)
@@ -172,6 +180,19 @@ export class BrokerReviewService {
       return this.read(caseId);
     } catch(e) {this.db.exec("ROLLBACK");throw e;}
   }
+  // STEP5B08_KEYIN_COVERAGE: derive the *complete* dynamic catalog from the current Case
+  // and verified original source observations, never from the draft's own
+  // mutable expected_field_ids array.
+  coverageStatus(review,live) {
+    const canonical=buildKeyinCatalog(live.item,deriveStep3eOptions(live.item,live.docs));
+    const verified=new Set(live.docs.verified.map(x=>x.id));
+    return assessKeyinCoverage(review,{
+      expectedFields:canonical.fields,expectedSections:canonical.sections,
+      records:live.docs.records.filter(x=>verified.has(x.id)),
+      caseDriverIds:(live.item.drivers??[]).map(d=>d.id).filter(Boolean),
+      expectedExact:true,verifyRequired:true
+    });
+  }
   bindingStatus(caseId,review,live) {
     const binding=this.db.prepare("SELECT * FROM keyin_review_bindings WHERE case_id=?").get(caseId);
     const issues=[...live.docs.warnings];
@@ -184,7 +205,8 @@ export class BrokerReviewService {
     }
     if(sha256json(review.source_files)!==sha256json(live.docs.verified))
       issues.push("Review's source file list does not match stored originals.");
-    return issues;
+    issues.push(...this.coverageStatus(review,live).structuralIssues); // STEP5B08_KEYIN_COVERAGE
+    return [...new Set(issues)];
   }
   read(caseId) {
     const live=this.live(caseId);
@@ -192,11 +214,12 @@ export class BrokerReviewService {
     if(!review)return {review:null,sourceIssues:live.docs.warnings,ready:false,
       caseId,fieldIssues:[],confirmed:0,total:0};
     const sourceIssues=this.bindingStatus(caseId,review,live);
+    const keyinCoverage=this.coverageStatus(review,live); // STEP5B08_KEYIN_COVERAGE
     const fieldIssues=review.sections.flatMap(s=>sectionIssues(review,s.id,new Date().toISOString().slice(0,10))
       .map(message=>({sectionId:s.id,message})));
-    return {review,sourceIssues,fieldIssues,
+    return {review,sourceIssues,fieldIssues,keyinCoverage,
       confirmed:review.sections.filter(s=>s.status==="CONFIRMED").length,
-      total:review.sections.length,ready:sourceIssues.length===0&&
+      total:review.sections.length,ready:sourceIssues.length===0&&keyinCoverage.reconciliationIssues.length===0&&keyinCoverage.fieldIssues.length===0&&
         reviewExportIssues(review,{submissionDate:new Date().toISOString().slice(0,10)}).length===0};
   }
   checked(caseId,expectedRevision) {
@@ -228,6 +251,9 @@ export class BrokerReviewService {
   confirm(caseId,body={}) {
     const actor=actorOf(body.actor),expectedRevision=revisionOf(body.expectedRevision);
     const checked=this.checked(caseId,expectedRevision);
+    const coverage=this.coverageStatus(checked.review,checked.live); // STEP5B08_KEYIN_COVERAGE
+    if(["history","final"].includes(body.sectionId) && (coverage.reconciliationIssues.length||coverage.fieldIssues.length))
+      throw err("Source-event/Key-in reconciliation required.",422,[...coverage.reconciliationIssues,...coverage.fieldIssues]);
     const date=new Date().toISOString().slice(0,10);
     // An empty original package must never be accidentally treated as verified.
     const live=checked.live;
@@ -249,6 +275,23 @@ export class BrokerReviewService {
     const live=this.live(caseId);
     if(live.docs.warnings.length)throw err("Cannot rebuild with stale source files.",409,live.docs.warnings);
     const fresh=createBrokerReview(live.item,this.createOptions(live));
+    // Step 5B-01: an explicit Broker correction survives a deliberate rebuild.
+    // The newly built page stays PENDING, and changed extracted evidence raises
+    // a conflict instead of overwriting that correction.
+    const previousQuote=previous.fields.find(f=>f.id==="policy.quoteNumber");
+    const freshQuote=fresh.fields.find(f=>f.id==="policy.quoteNumber");
+    if (previousQuote && freshQuote &&
+        ["BROKER_CORRECTED","MANUAL_FROM_SOURCE"].includes(previousQuote.origin)) {
+      const nextExtracted=freshQuote.value;
+      freshQuote.value=previousQuote.value;
+      freshQuote.origin=previousQuote.origin;
+      freshQuote.corrected_by=previousQuote.corrected_by;
+      freshQuote.corrected_at=previousQuote.corrected_at;
+      freshQuote.conflict=freshQuote.conflict ||
+        (nextExtracted !== null && nextExtracted !== undefined &&
+         String(nextExtracted).trim().toUpperCase() !==
+         String(previousQuote.value??"").trim().toUpperCase());
+    }
     fresh.revision=previous.revision+1;
     this.db.exec("BEGIN IMMEDIATE");
     try {
