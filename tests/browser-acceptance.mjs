@@ -63,7 +63,12 @@ try {
         await context.route('**/*', route => { const url = new URL(route.request().url()); return [frontend,backend].includes(url.origin) ? route.continue() : route.abort('blockedbyclient'); });
         // More-specific Playwright route has precedence over the loopback guard.
         // Only the synthetic OCR transport is intercepted; UI and storage stay real.
-        await context.route('**/local-ocr**', route => rt.handleLocalOcr(route));
+        await context.route('**/local-ocr**', route => {
+          const url = new URL(route.request().url());
+          if (url.origin === backend && ['/local-ocr','/local-ocr/health'].includes(url.pathname))
+            return rt.handleLocalOcr(route);
+          return route.fallback();
+        });
         await context.tracing.start({ screenshots:true, snapshots:true, sources:false }); tracingStarted = true;
         page = await context.newPage(); page.setDefaultTimeout(12000); page.setDefaultNavigationTimeout(60000);
         page.on('worker', worker => scenario.workers.push(worker.url()));
